@@ -1,0 +1,98 @@
+name: SonarCloud
+description: |
+  Wrap a .NET build/test run with SonarCloud analysis. Call once with mode=begin before the build, then again with
+  mode=end after the test step, on the same machine.
+
+  The SonarCloud token is read from the SONAR_TOKEN environment variable. Map the SONAR_TOKEN secret into env on the
+  calling job so the value flows through the secret-masking pipeline; composite actions cannot declare secret inputs.
+inputs:
+  mode:
+    description: 'begin (before build) or end (after test).'
+    required: true
+  project-key:
+    description: 'SonarCloud project key. Required for both modes.'
+    required: true
+  organization:
+    description: 'SonarCloud organization slug. Required for begin.'
+    required: false
+    default: ''
+  host-url:
+    description: 'Sonar host URL.'
+    required: false
+    default: 'https://sonarcloud.io'
+  version:
+    description: 'Project version (the MinVer SemVer2 output). Optional but improves Sonar history.'
+    required: false
+    default: ''
+  coverage-glob:
+    description: 'Glob for cobertura coverage reports. Microsoft.Testing.Platform writes <guid>.cobertura.xml files, so the default matches any under the workspace.'
+    required: false
+    default: '**/*.cobertura.xml'
+  extra-begin-args:
+    description: 'Extra raw arguments appended to the dotnet-sonarscanner begin invocation.'
+    required: false
+    default: ''
+  exclusions:
+    description: 'Comma-separated globs for sonar.exclusions. Empty = flag omitted.'
+    required: false
+    default: ''
+  coverage-exclusions:
+    description: 'Comma-separated globs for sonar.coverage.exclusions. Empty = flag omitted.'
+    required: false
+    default: ''
+  cpd-exclusions:
+    description: 'Comma-separated globs for sonar.cpd.exclusions. Empty = flag omitted.'
+    required: false
+    default: ''
+  test-exclusions:
+    description: 'Comma-separated globs for sonar.test.exclusions. Empty = flag omitted.'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Directory in which to run sonarscanner begin/end. Must be the folder the build runs from.'
+    required: false
+    default: '.'
+runs:
+  using: composite
+  steps:
+  - name: Validate SONAR_TOKEN is in scope
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/validate-sonar-token-is-in-scope.cs
+  - name: Set up JDK 25 (SonarScanner prerequisite)
+    if: inputs.mode == 'begin'
+    uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+    with:
+      distribution: temurin
+      java-version: '25.0.4+101.0.LTS'
+  - name: Install (or update) dotnet-sonarscanner global tool
+    if: inputs.mode == 'begin'
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/install--or-update--dotnet-sonarscanner-global-tool.cs
+  - name: SonarScanner begin
+    if: inputs.mode == 'begin'
+    env:
+      MSYS2_ARG_CONV_EXCL: '*'
+      WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      PROJECT_KEY: ${{ inputs.project-key }}
+      ORGANIZATION: ${{ inputs.organization }}
+      HOST_URL: ${{ inputs.host-url }}
+      VERSION: ${{ inputs.version }}
+      COVERAGE_GLOB: ${{ inputs.coverage-glob }}
+      EXTRA_BEGIN_ARGS: ${{ inputs.extra-begin-args }}
+      EXCLUSIONS: ${{ inputs.exclusions }}
+      COVERAGE_EXCLUSIONS: ${{ inputs.coverage-exclusions }}
+      CPD_EXCLUSIONS: ${{ inputs.cpd-exclusions }}
+      TEST_EXCLUSIONS: ${{ inputs.test-exclusions }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/sonarscanner-begin.cs
+  - name: SonarScanner end
+    if: inputs.mode == 'end'
+    env:
+      MSYS2_ARG_CONV_EXCL: '*'
+      WORKING_DIRECTORY: ${{ inputs.working-directory }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/sonarscanner-end.cs

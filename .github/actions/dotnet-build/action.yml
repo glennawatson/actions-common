@@ -1,0 +1,47 @@
+name: .NET Build
+description: Standard dotnet CLI restore, build, and optional pack
+inputs:
+  configuration:
+    description: 'Build configuration'
+    required: false
+    default: 'Release'
+  src-folder:
+    description: 'Folder containing the solution'
+    required: false
+    default: 'src'
+  solution-file:
+    description: 'Solution file relative to src-folder'
+    required: false
+    default: ''
+  create-packages:
+    description: 'Run dotnet pack after build'
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+  - name: Restore NuGet packages
+    env:
+      SOLUTION_FILE: ${{ inputs.solution-file }}
+      CONFIGURATION: ${{ inputs.configuration }}
+      WORKING_DIRECTORY: ${{ inputs.src-folder }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/restore-nuget-packages.cs
+  - name: Build solution with dotnet CLI
+    env:
+      SOLUTION_FILE: ${{ inputs.solution-file }}
+      CONFIGURATION: ${{ inputs.configuration }}
+      WORKING_DIRECTORY: ${{ inputs.src-folder }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/build-solution-with-dotnet-cli.cs
+  - name: Pack NuGet packages
+    if: inputs.create-packages == 'true'
+    env:
+      SOLUTION_FILE: ${{ inputs.solution-file }}
+      CONFIGURATION: ${{ inputs.configuration }}
+      WORKING_DIRECTORY: ${{ inputs.src-folder }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/pack-nuget-packages.cs

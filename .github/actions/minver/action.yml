@@ -1,0 +1,63 @@
+name: MinVer
+description: Install the minver-cli dotnet global tool and stamp MINVER_* environment variables and step outputs for the current commit.
+inputs:
+  tag-prefix:
+    description: 'Tag prefix MinVer expects on release tags. Release tags here are bare (4.2.2), so the default is empty.'
+    required: false
+    default: ''
+  minimum-major-minor:
+    description: 'Floor major.minor when no tag is reachable. Empty leaves the MinVer default of 0.0.'
+    required: false
+    default: '1.0'
+  default-pre-release-identifiers:
+    description: 'Pre-release identifier(s) for height-only builds.'
+    required: false
+    default: 'alpha.0'
+  auto-increment:
+    description: 'Which segment MinVer auto-increments past the latest tag (major|minor|patch).'
+    required: false
+    default: 'patch'
+  version-override:
+    description: 'Exact version to stamp, bypassing the MinVer git walk. Empty = compute the version from git tags as normal.'
+    required: false
+    default: ''
+  verbosity:
+    description: 'MinVer CLI verbosity (error|warn|info|debug|trace).'
+    required: false
+    default: 'info'
+outputs:
+  SemVer2:
+    description: 'Full MinVer SemVer2 version string (e.g. 4.2.3-alpha.0.45+sha.abcdef0)'
+    value: ${{ steps.outputs.outputs.SemVer2 }}
+  SimpleVersion:
+    description: 'major.minor.patch only (no pre-release / metadata)'
+    value: ${{ steps.outputs.outputs.SimpleVersion }}
+  NuGetPackageVersion:
+    description: 'NuGet-compatible version (SemVer2 without build metadata)'
+    value: ${{ steps.outputs.outputs.NuGetPackageVersion }}
+  GitCommitId:
+    description: 'Full SHA of HEAD'
+    value: ${{ steps.outputs.outputs.GitCommitId }}
+  VersionHeight:
+    description: 'Commits since the last reachable version tag'
+    value: ${{ steps.outputs.outputs.VersionHeight }}
+runs:
+  using: composite
+  steps:
+  - name: Install (or update) minver-cli global tool
+    if: inputs.version-override == ''
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/install--or-update--minver-cli-global-tool.cs
+  - name: Compute MinVer version and export MINVER_* + GITHUB_OUTPUT
+    id: outputs
+    env:
+      TAG_PREFIX: ${{ inputs.tag-prefix }}
+      MINIMUM_MAJOR_MINOR: ${{ inputs.minimum-major-minor }}
+      DEFAULT_PRE_RELEASE: ${{ inputs.default-pre-release-identifiers }}
+      AUTO_INCREMENT: ${{ inputs.auto-increment }}
+      VERBOSITY: ${{ inputs.verbosity }}
+      VERSION_OVERRIDE: ${{ inputs.version-override }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/compute-minver-version-and-export-minver-----github-output.cs

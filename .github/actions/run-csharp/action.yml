@@ -1,0 +1,29 @@
+name: Run a C# file
+description: Run a C# file with .NET from the runner's temporary folder.
+inputs:
+  script-file:
+    description: Absolute C# path or a path relative to the caller checkout.
+    required: false
+    default: ''
+  shared-script:
+    description: C# path relative to this action's scripts folder.
+    required: false
+    default: ''
+  arguments:
+    description: Newline-separated arguments.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+  - name: Run C#
+    shell: dotnet run --file {0}
+    working-directory: ${{ runner.temp }}
+    env:
+      ACTION_PATH: ${{ github.action_path }}
+      SCRIPT_FILE: ${{ inputs.script-file }}
+      SHARED_SCRIPT: ${{ inputs.shared-script }}
+      SCRIPT_ARGUMENTS: ${{ inputs.arguments }}
+    run: |
+      #!/usr/bin/env dotnet
+      #:include ${{ env.ACTION_PATH }}/Run.cs

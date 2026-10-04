@@ -1,0 +1,56 @@
+name: Certum SimplySign NuGet signing (prebuilt image)
+description: |
+  Author-sign .nupkg files with a Certum "Code Signing in the Cloud" certificate.
+
+  Certum SimplySign has no headless signing API: the cloud key is reachable only
+  through the SimplySign Desktop GUI, which exposes it as a PKCS#11 token. This
+  action runs that GUI headlessly (Xvfb + xdotool), logs in with the TOTP derived
+  from the otpauth URI, then signs each package with jsign over PKCS#11 and
+  verifies the result with `dotnet nuget verify`.
+
+  MUST run inside the prebuilt certum-signer image (ghcr.io/reactiveui/certum-signer),
+  which bakes in SimplySign Desktop, jsign, the .NET 10 and 11 SDKs, and the
+  X11/PKCS#11 dependencies and exports $SS_DIST / $JSIGN_JAR. Credentials are read
+  from the environment — composite actions cannot declare secret-typed inputs — so
+  map these secrets into env on the calling job (standard secrets.* syntax):
+    CERTUM_USER_ID            SimplySign login id
+    CERTUM_OTP_URI            otpauth:// URI for the SimplySign TOTP
+    CERTUM_CERT_FINGERPRINT   (optional) SHA-256 fingerprint to assert against
+inputs:
+  packages-glob:
+    description: 'Glob of .nupkg files to sign (relative to the working directory).'
+    required: false
+    default: 'signed/*.nupkg'
+  timestamp-url:
+    description: 'RFC3161 timestamp authority URL.'
+    required: false
+    default: 'http://time.certum.pl'
+  launch-seconds:
+    description: 'Seconds to wait after launching SimplySign before driving the UI.'
+    required: false
+    default: '20'
+runs:
+  using: composite
+  steps:
+  - name: Resolve prebuilt SimplySign paths
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/resolve-prebuilt-simplysign-paths.cs
+  - name: Start headless display
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/start-headless-display.cs
+  - name: Connect SimplySign (headless login)
+    env:
+      DISPLAY: ':99'
+      LAUNCH_SECONDS: ${{ inputs.launch-seconds }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/connect-simplysign--headless-login.cs
+  - name: Sign packages with jsign + verify
+    env:
+      TS_URL: ${{ inputs.timestamp-url }}
+      PKG_GLOB: ${{ inputs.packages-glob }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/sign-packages-with-jsign---verify.cs

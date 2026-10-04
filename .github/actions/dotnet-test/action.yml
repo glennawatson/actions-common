@@ -1,0 +1,63 @@
+name: .NET Test
+description: Run tests on Microsoft Testing Platform (MTP) with native coverage and per-OS artifact upload
+inputs:
+  configuration:
+    description: 'Build configuration'
+    required: false
+    default: 'Release'
+  src-folder:
+    description: 'Folder containing the solution'
+    required: false
+    default: 'src'
+  solution-file:
+    description: 'Solution file relative to src-folder'
+    required: false
+    default: ''
+  enable-detailed-test-logging:
+    description: 'Enable MTP diagnostic logging for hang/crash debugging: writes log_*.diag (Trace level, synchronous), turns on framework log-level Trace, and switches console output to Detailed (real-time per-test).'
+    required: false
+    default: 'true'
+  test-timeout:
+    description: 'Optional global test timeout passed to MTP --timeout (format [h|m|s], e.g. "5m"). Empty = no timeout. Use to fail fast on hangs instead of letting the CI runner kill the job.'
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+  - name: Run tests with Microsoft Testing Platform and native coverage
+    env:
+      SRC_FOLDER: ${{ inputs.src-folder }}
+      SOLUTION_FILE: ${{ inputs.solution-file }}
+      CONFIGURATION: ${{ inputs.configuration }}
+      DETAILED_LOGGING: ${{ inputs.enable-detailed-test-logging }}
+      TEST_TIMEOUT: ${{ inputs.test-timeout }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/scripts/run-tests-with-microsoft-testing-platform-and-native-coverage.cs
+  - name: Upload per-OS coverage reports as build artifacts
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+    with:
+      name: tmp-coverage-${{ runner.os }}
+      path: |
+        ${{ inputs.src-folder }}/**/coverage.cobertura.xml
+        ${{ inputs.src-folder }}/**/coverage*.cobertura.xml
+        ${{ inputs.src-folder }}/**/TestResults/**/*.cobertura.xml
+      if-no-files-found: warn
+      retention-days: 3
+  - name: Upload MTP diagnostic logs
+    if: always() && inputs.enable-detailed-test-logging == 'true'
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+    with:
+      name: mtp-diagnostic-logs-${{ runner.os }}
+      path: |
+        ${{ inputs.src-folder }}/**/TestResults/**/*.diag
+        ${{ inputs.src-folder }}/**/TestResults/**/log_*.diag
+      if-no-files-found: ignore
+      retention-days: 7
+  - name: Upload test HTML reports
+    if: always()
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+    with:
+      name: test-html-${{ runner.os }}
+      path: ${{ inputs.src-folder }}/**/TestResults/**/*.html
+      if-no-files-found: ignore

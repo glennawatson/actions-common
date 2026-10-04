@@ -1,0 +1,95 @@
+name: Common .NET build
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner for this build.
+        type: string
+        default: ubuntu-latest
+      solutionFile:
+        description: Solution relative to srcFolder.
+        type: string
+        required: true
+      srcFolder:
+        description: Folder containing the solution and global.json.
+        type: string
+        default: src
+      configuration:
+        description: Build configuration.
+        type: string
+        default: Release
+      dotnetVersions:
+        description: Newline-separated SDK versions. Include .NET 11 for the shared scripts.
+        type: string
+        default: |
+          8.0.x
+          10.0.x
+          11.0.x
+      stampVersion:
+        description: Compute the version with MinVer.
+        type: boolean
+        default: true
+      minverTagPrefix:
+        description: Prefix on release tags.
+        type: string
+        default: ''
+      minverMinimumMajorMinor:
+        description: Version floor when no tag exists.
+        type: string
+        default: '1.0'
+      minverAutoIncrement:
+        description: Segment to increment for development builds.
+        type: string
+        default: patch
+      restoreRoslynSlots:
+        description: Restore the PublicApiSharp Roslyn projects before building.
+        type: boolean
+        default: false
+      testPreparationFile:
+        description: C# file to run with the test argument before building.
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Build and test
+    runs-on: ${{ inputs.runner }}
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: '1'
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
+    - name: Set up .NET
+      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
+      with:
+        dotnet-versions: ${{ inputs.dotnetVersions }}
+        stamp-version: ${{ inputs.stampVersion }}
+        minver-tag-prefix: ${{ inputs.minverTagPrefix }}
+        minver-minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
+        minver-auto-increment: ${{ inputs.minverAutoIncrement }}
+    - name: Restore Roslyn slots
+      if: inputs.restoreRoslynSlots
+      uses: glennawatson/actions-common/.github/actions/restore-roslyn-slots@main
+      with:
+        src-folder: ${{ inputs.srcFolder }}
+    - name: Prepare tests
+      if: inputs.testPreparationFile != ''
+      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      with:
+        script-file: ${{ inputs.testPreparationFile }}
+        arguments: test
+    - name: Build
+      uses: glennawatson/actions-common/.github/actions/dotnet-build@main
+      with:
+        src-folder: ${{ inputs.srcFolder }}
+        solution-file: ${{ inputs.solutionFile }}
+        configuration: ${{ inputs.configuration }}
+    - name: Test
+      uses: glennawatson/actions-common/.github/actions/dotnet-test@main
+      with:
+        src-folder: ${{ inputs.srcFolder }}
+        solution-file: ${{ inputs.solutionFile }}
+        configuration: ${{ inputs.configuration }}
