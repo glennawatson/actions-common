@@ -77,7 +77,7 @@ Run the repository checks on Linux:
 dotnet run --file tools/Verify.cs
 ```
 
-The checks compile every action script with warnings treated as errors. They check shared action inputs and workflow syntax. The repository's CI runs the same checks.
+The checks compile every action script with warnings treated as errors. They check shared action inputs and workflow syntax. They run the C# launcher to check remote paths, argument handling and child exit codes. The repository's CI runs the same checks.
 
 ## Updates
 

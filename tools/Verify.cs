@@ -71,6 +71,8 @@ File.SetUnixFileMode(checker, UnixFileMode.UserRead | UnixFileMode.UserWrite | U
 var workflows = Directory.GetFiles(Path.Combine(root, ".github/workflows"), "*.yml");
 var lint = Process.Run(checker, ["-shellcheck=", "-pyflakes=", .. workflows]);
 if (lint.ExitCode != 0) return lint.ExitCode;
+var runner = Process.Run("dotnet", ["run", "--file", Path.Combine(root, "tools", "VerifyRunner.cs")]);
+if (runner.ExitCode != 0) return runner.ExitCode;
 Console.WriteLine($"Checked {references} shared references. Compiled {scripts.Length} C# files without warnings. Checked {workflows.Length} workflows.");
 return 0;
 
