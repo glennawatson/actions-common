@@ -63,7 +63,7 @@ foreach (var package in packages)
         Thread.Sleep(TimeSpan.FromSeconds(4));
     }
 
-    if (Process.Run("dotnet", ["nuget", "verify", package, "--all", "--verbosity", "detailed"]) is { ExitCode: not 0 } verify)
+    if (package.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase) && Process.Run("dotnet", ["nuget", "verify", package, "--all", "--verbosity", "detailed"]) is { ExitCode: not 0 } verify)
     {
         return verify.ExitCode;
     }

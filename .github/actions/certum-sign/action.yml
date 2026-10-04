@@ -18,7 +18,7 @@ description: |
     CERTUM_CERT_FINGERPRINT   (optional) SHA-256 fingerprint to assert against
 inputs:
   packages-glob:
-    description: 'Glob of .nupkg files to sign (relative to the working directory).'
+    description: 'Glob of files to sign (relative to the working directory).'
     required: false
     default: 'signed/*.nupkg'
   timestamp-url:
