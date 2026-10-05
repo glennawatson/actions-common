@@ -1,0 +1,71 @@
+name: AUR build
+description: Write an AUR -bin PKGBUILD and .SRCINFO that repackage release .deb files.
+
+inputs:
+  debs:
+    description: 'Folder holding the release .deb files, named ..._amd64.deb and/or ..._arm64.deb.'
+    required: true
+  name:
+    description: 'AUR package name, such as myapp-bin. A -bin name provides and conflicts with the name without -bin.'
+    required: true
+  version:
+    description: 'Release version; a pre-release suffix sorts before the release.'
+    required: true
+  release:
+    description: 'Package release (pkgrel).'
+    required: false
+    default: '1'
+  description:
+    description: 'One-line description.'
+    required: true
+  url:
+    description: 'Project home page.'
+    required: true
+  license:
+    description: 'Licences, one per line, as SPDX identifiers such as MIT.'
+    required: true
+  depends:
+    description: 'Arch dependencies, one per line.'
+    required: false
+    default: ''
+  optdepends:
+    description: 'Optional dependencies, one per line, as "package: reason".'
+    required: false
+    default: ''
+  options:
+    description: 'makepkg options, one per line.'
+    required: false
+    default: |
+      !strip
+      !debug
+  maintainer:
+    description: 'Maintainer comment, such as "Name <email>".'
+    required: false
+    default: ''
+  source-url-template:
+    description: 'Download URL of each .deb, with {version} and {file} placeholders.'
+    required: true
+  output:
+    description: 'Folder to write PKGBUILD and .SRCINFO into.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write AUR package
+      shell: bash
+      env:
+        AUR_DEBS: ${{ inputs.debs }}
+        AUR_NAME: ${{ inputs.name }}
+        AUR_VERSION: ${{ inputs.version }}
+        AUR_RELEASE: ${{ inputs.release }}
+        AUR_DESCRIPTION: ${{ inputs.description }}
+        AUR_URL: ${{ inputs.url }}
+        AUR_LICENSE: ${{ inputs.license }}
+        AUR_DEPENDS: ${{ inputs.depends }}
+        AUR_OPTDEPENDS: ${{ inputs.optdepends }}
+        AUR_OPTIONS: ${{ inputs.options }}
+        AUR_MAINTAINER: ${{ inputs.maintainer }}
+        AUR_SOURCE_URL: ${{ inputs.source-url-template }}
+        AUR_OUTPUT: ${{ inputs.output }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/aur-build.cs"

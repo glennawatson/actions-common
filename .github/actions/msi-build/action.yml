@@ -1,0 +1,94 @@
+name: MSI build
+description: Build an unsigned .msi installer from an app folder in managed code on any runner.
+
+inputs:
+  source:
+    description: 'App folder; every file in it is installed, except symbolic links.'
+    required: true
+  output:
+    description: 'The .msi to write.'
+    required: true
+  product-name:
+    description: 'Product name shown in Apps and Features.'
+    required: true
+  manufacturer:
+    description: 'Manufacturer shown in Apps and Features.'
+    required: true
+  version:
+    description: 'Semantic version; written as a.b.c.'
+    required: true
+  upgrade-code:
+    description: 'GUID that stays the same across versions, so a newer MSI replaces an older one.'
+    required: true
+  architecture:
+    description: 'x64 or arm64.'
+    required: true
+  install-scope:
+    description: 'perMachine (Program Files) or perUser (LocalAppData\Programs, no elevation).'
+    required: false
+    default: 'perMachine'
+  install-folder:
+    description: 'Folder under Program Files or LocalAppData\Programs, such as "Company\App"; defaults to the product name.'
+    required: false
+    default: ''
+  executable:
+    description: 'Path of the app .exe, relative to source; the Start menu shortcut opens it.'
+    required: true
+  shortcut-name:
+    description: 'Start menu shortcut name; defaults to the product name.'
+    required: false
+    default: ''
+  icon:
+    description: 'Optional .ico for the shortcut and Apps and Features; without it the shortcut shows the executable icon.'
+    required: false
+    default: ''
+  homepage:
+    description: 'Optional URL shown in Apps and Features.'
+    required: false
+    default: ''
+  file-types:
+    description: 'File extensions to offer in Open with, one per line, such as .pdf.'
+    required: false
+    default: ''
+  file-type-name:
+    description: 'Name shown for the file types; defaults to "<product-name> document".'
+    required: false
+    default: ''
+  prog-id:
+    description: 'ProgID for the file types; defaults to the product name without spaces plus .Document.'
+    required: false
+    default: ''
+  license-rtf:
+    description: 'Optional .rtf license; when set, a full-UI install asks people to accept it.'
+    required: false
+    default: ''
+  dry-run:
+    description: 'true to check inputs and print the table rows without writing the .msi.'
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Build MSI
+      shell: bash
+      env:
+        MSI_SOURCE: ${{ inputs.source }}
+        MSI_OUTPUT: ${{ inputs.output }}
+        MSI_PRODUCT: ${{ inputs.product-name }}
+        MSI_MANUFACTURER: ${{ inputs.manufacturer }}
+        MSI_VERSION: ${{ inputs.version }}
+        MSI_UPGRADE_CODE: ${{ inputs.upgrade-code }}
+        MSI_ARCH: ${{ inputs.architecture }}
+        MSI_SCOPE: ${{ inputs.install-scope }}
+        MSI_FOLDER: ${{ inputs.install-folder }}
+        MSI_EXECUTABLE: ${{ inputs.executable }}
+        MSI_SHORTCUT: ${{ inputs.shortcut-name }}
+        MSI_ICON: ${{ inputs.icon }}
+        MSI_HOMEPAGE: ${{ inputs.homepage }}
+        MSI_FILE_TYPES: ${{ inputs.file-types }}
+        MSI_FILE_TYPE_NAME: ${{ inputs.file-type-name }}
+        MSI_PROG_ID: ${{ inputs.prog-id }}
+        MSI_LICENSE: ${{ inputs.license-rtf }}
+        MSI_DRY_RUN: ${{ inputs.dry-run }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/msi-build.cs"

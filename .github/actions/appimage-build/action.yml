@@ -1,0 +1,39 @@
+name: AppImage build
+description: Build a type-2 AppImage from a folder laid out as an AppDir.
+
+inputs:
+  appdir:
+    description: 'Folder laid out as an AppDir (AppRun, a .desktop file, its icon, usr/...). Symlinks and Unix modes are kept.'
+    required: true
+  architecture:
+    description: 'x86_64 or aarch64. Other architectures need runtime-url.'
+    required: true
+  output:
+    description: 'The .AppImage to write.'
+    required: true
+  executables:
+    description: 'Files to make executable, one per line, relative to the AppDir. AppRun always is. Needed on Windows, which has no Unix modes; elsewhere modes come from the tree.'
+    required: false
+    default: ''
+  runtime-url:
+    description: 'Type-2 runtime to embed. Empty uses the pinned AppImage/type2-runtime release for the architecture.'
+    required: false
+    default: ''
+  runtime-sha256:
+    description: 'SHA-256 of the runtime; required with runtime-url.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Build AppImage
+      shell: bash
+      env:
+        APPIMAGE_APPDIR: ${{ inputs.appdir }}
+        APPIMAGE_ARCH: ${{ inputs.architecture }}
+        APPIMAGE_OUTPUT: ${{ inputs.output }}
+        APPIMAGE_EXECUTABLES: ${{ inputs.executables }}
+        APPIMAGE_RUNTIME_URL: ${{ inputs.runtime-url }}
+        APPIMAGE_RUNTIME_SHA256: ${{ inputs.runtime-sha256 }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/appimage-build.cs"

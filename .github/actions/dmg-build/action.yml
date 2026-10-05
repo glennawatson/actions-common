@@ -1,0 +1,34 @@
+name: DMG build
+description: Build a compressed macOS .dmg (UDZO, case-sensitive HFS Plus) from a folder in pure C#.
+
+inputs:
+  source:
+    description: 'Folder whose contents go at the volume root, usually one App.app bundle.'
+    required: true
+  volume-name:
+    description: 'Name of the mounted volume.'
+    required: true
+  output:
+    description: 'Path of the .dmg file to write.'
+    required: true
+  applications-link:
+    description: 'Add an Applications symlink at the volume root for drag-to-install.'
+    required: false
+    default: 'true'
+  executables:
+    description: 'Files to mark executable when building on Windows, one path or glob per line, relative to source. Other runners read the file modes.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Build disk image
+      shell: bash
+      env:
+        DMG_SOURCE: ${{ inputs.source }}
+        DMG_VOLUME: ${{ inputs.volume-name }}
+        DMG_OUTPUT: ${{ inputs.output }}
+        DMG_APPLICATIONS_LINK: ${{ inputs.applications-link }}
+        DMG_EXECUTABLES: ${{ inputs.executables }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/dmg-build.cs" -- "$PWD" "$DMG_SOURCE" "$DMG_VOLUME" "$DMG_OUTPUT" "$DMG_APPLICATIONS_LINK"

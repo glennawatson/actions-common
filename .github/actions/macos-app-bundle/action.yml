@@ -1,0 +1,59 @@
+name: macOS app bundle
+description: Lay out an unsigned macOS .app bundle from a published app folder.
+
+inputs:
+  source:
+    description: 'Published app folder; it goes into Contents/MacOS with its symlinks and Unix modes.'
+    required: true
+  output:
+    description: 'The .app folder to create; an existing one is replaced.'
+    required: true
+  name:
+    description: 'App name shown by Finder and the menu bar.'
+    required: true
+  bundle-identifier:
+    description: 'Reverse-DNS bundle identifier, such as com.example.MyApp.'
+    required: true
+  version:
+    description: 'Version; only its numeric core (1.2.3) goes into the bundle.'
+    required: true
+  executable:
+    description: 'File name of the executable in the source folder.'
+    required: true
+  icon:
+    description: 'One .icns file, copied as is; or square PNGs of 16, 32, 64, 128, 256, 512 or 1024 pixels, one path per line and one per size, wrapped into an .icns without scaling.'
+    required: true
+  minimum-system-version:
+    description: 'Oldest macOS version the app runs on, such as 12.0.'
+    required: true
+  document-types:
+    description: 'File associations, one per line, as "extensions or UTIs: Editor|Viewer|Shell|None[: name]", such as "pdf com.adobe.pdf: Viewer: PDF Document".'
+    required: false
+    default: ''
+  category:
+    description: 'App Store category, such as public.app-category.productivity.'
+    required: false
+    default: ''
+  copyright:
+    description: 'Copyright line shown in the About window, such as "Copyright (c) 2026 Example Ltd."'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Lay out app bundle
+      shell: bash
+      env:
+        MACOS_SOURCE: ${{ inputs.source }}
+        MACOS_OUTPUT: ${{ inputs.output }}
+        MACOS_NAME: ${{ inputs.name }}
+        MACOS_BUNDLE_IDENTIFIER: ${{ inputs.bundle-identifier }}
+        MACOS_VERSION: ${{ inputs.version }}
+        MACOS_EXECUTABLE: ${{ inputs.executable }}
+        MACOS_ICON: ${{ inputs.icon }}
+        MACOS_MINIMUM_SYSTEM_VERSION: ${{ inputs.minimum-system-version }}
+        MACOS_DOCUMENT_TYPES: ${{ inputs.document-types }}
+        MACOS_CATEGORY: ${{ inputs.category }}
+        MACOS_COPYRIGHT: ${{ inputs.copyright }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/macos-app-bundle.cs"

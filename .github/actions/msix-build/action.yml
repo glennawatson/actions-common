@@ -1,0 +1,100 @@
+name: MSIX build
+description: Build an unsigned full-trust desktop .msix from an app folder on any runner.
+
+inputs:
+  source:
+    description: 'App folder; every file in it is packaged, except symbolic links. Put the logos in it too.'
+    required: true
+  output:
+    description: 'The .msix to write.'
+    required: true
+  identity-name:
+    description: 'Package identity name, such as Company.App; keep it stable across releases.'
+    required: true
+  publisher:
+    description: 'Publisher; must match the signing certificate subject, such as "CN=Name, O=Name, C=AU".'
+    required: true
+  version:
+    description: 'Version; written as a.b.c.d with any pre-release or build suffix dropped.'
+    required: true
+  architecture:
+    description: 'x64, arm64 or x86.'
+    required: true
+  display-name:
+    description: 'App name shown to people.'
+    required: true
+  publisher-display-name:
+    description: 'Publisher name shown to people.'
+    required: true
+  description:
+    description: 'Short app description; defaults to the display name.'
+    required: false
+    default: ''
+  executable:
+    description: 'Path of the app .exe, relative to source.'
+    required: true
+  application-id:
+    description: 'Application Id inside the package; keep it stable across releases.'
+    required: false
+    default: 'App'
+  square44-logo:
+    description: '44x44 logo, relative to source.'
+    required: true
+  square150-logo:
+    description: '150x150 logo, relative to source.'
+    required: true
+  store-logo:
+    description: '50x50 store logo, relative to source.'
+    required: true
+  language:
+    description: 'Resource language.'
+    required: false
+    default: 'en-us'
+  min-version:
+    description: 'Lowest Windows build the package installs on.'
+    required: false
+    default: '10.0.17763.0'
+  max-version-tested:
+    description: 'Highest Windows build tested.'
+    required: false
+    default: '10.0.26100.0'
+  file-types:
+    description: 'File extensions the app opens, one per line, such as .pdf.'
+    required: false
+    default: ''
+  file-type-name:
+    description: 'Name shown for the file types; defaults to "<display-name> document".'
+    required: false
+    default: ''
+  capabilities:
+    description: 'Capabilities, one per line; prefix a name the action does not know with uap, uap2, uap3, uap4, uap6, uap7, uap11 or rescap, such as uap4:userDataTasks.'
+    required: false
+    default: 'runFullTrust'
+
+runs:
+  using: composite
+  steps:
+    - name: Build MSIX
+      shell: bash
+      env:
+        MSIX_SOURCE: ${{ inputs.source }}
+        MSIX_OUTPUT: ${{ inputs.output }}
+        MSIX_IDENTITY: ${{ inputs.identity-name }}
+        MSIX_PUBLISHER: ${{ inputs.publisher }}
+        MSIX_VERSION: ${{ inputs.version }}
+        MSIX_ARCH: ${{ inputs.architecture }}
+        MSIX_DISPLAY_NAME: ${{ inputs.display-name }}
+        MSIX_PUBLISHER_DISPLAY_NAME: ${{ inputs.publisher-display-name }}
+        MSIX_DESCRIPTION: ${{ inputs.description }}
+        MSIX_EXECUTABLE: ${{ inputs.executable }}
+        MSIX_APP_ID: ${{ inputs.application-id }}
+        MSIX_LOGO44: ${{ inputs.square44-logo }}
+        MSIX_LOGO150: ${{ inputs.square150-logo }}
+        MSIX_STORE_LOGO: ${{ inputs.store-logo }}
+        MSIX_LANGUAGE: ${{ inputs.language }}
+        MSIX_MIN_VERSION: ${{ inputs.min-version }}
+        MSIX_MAX_TESTED: ${{ inputs.max-version-tested }}
+        MSIX_FILE_TYPES: ${{ inputs.file-types }}
+        MSIX_FILE_TYPE_NAME: ${{ inputs.file-type-name }}
+        MSIX_CAPABILITIES: ${{ inputs.capabilities }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/msix-build.cs"

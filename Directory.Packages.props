@@ -2,12 +2,17 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <RoslynCommonAnalyzersVersion>5.1.2</RoslynCommonAnalyzersVersion>
+    <DotNetLibrariesVersion>11.0.0-rc.1.26425.128</DotNetLibrariesVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="StyleSharp.Analyzers" Version="$(RoslynCommonAnalyzersVersion)" />
     <PackageVersion Include="PerformanceSharp.Analyzers" Version="$(RoslynCommonAnalyzersVersion)" />
     <PackageVersion Include="SecuritySharp.Analyzers" Version="$(RoslynCommonAnalyzersVersion)" />
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
-    <PackageVersion Include="System.Management" Version="10.0.12" />
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="$(DotNetLibrariesVersion)" />
+    <PackageVersion Include="System.IO.Hashing" Version="$(DotNetLibrariesVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="$(DotNetLibrariesVersion)" />
+    <PackageVersion Include="Pkcs11Interop" Version="5.3.0" />
+    <PackageVersion Include="OpenMcdf" Version="3.3.0" />
   </ItemGroup>
 </Project>
