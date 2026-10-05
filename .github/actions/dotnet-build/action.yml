@@ -1,5 +1,6 @@
 name: .NET Build
 description: Standard dotnet CLI restore, build, and optional pack
+
 inputs:
   configuration:
     description: 'Build configuration'
@@ -17,31 +18,34 @@ inputs:
     description: 'Run dotnet pack after build'
     required: false
     default: 'false'
+
 runs:
   using: composite
   steps:
-  - name: Restore NuGet packages
-    env:
-      SOLUTION_FILE: ${{ inputs.solution-file }}
-      CONFIGURATION: ${{ inputs.configuration }}
-      WORKING_DIRECTORY: ${{ inputs.src-folder }}
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
-    with:
-      script-file: ${{ github.action_path }}/scripts/restore-nuget-packages.cs
-  - name: Build solution with dotnet CLI
-    env:
-      SOLUTION_FILE: ${{ inputs.solution-file }}
-      CONFIGURATION: ${{ inputs.configuration }}
-      WORKING_DIRECTORY: ${{ inputs.src-folder }}
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
-    with:
-      script-file: ${{ github.action_path }}/scripts/build-solution-with-dotnet-cli.cs
-  - name: Pack NuGet packages
-    if: inputs.create-packages == 'true'
-    env:
-      SOLUTION_FILE: ${{ inputs.solution-file }}
-      CONFIGURATION: ${{ inputs.configuration }}
-      WORKING_DIRECTORY: ${{ inputs.src-folder }}
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
-    with:
-      script-file: ${{ github.action_path }}/scripts/pack-nuget-packages.cs
+    # SOLUTION_FILE stays unquoted so an empty value passes no argument.
+    # Restore in the build configuration: a package reference can depend on it, as Uno.Sdk's DevServer does on
+    # Optimize, and a Debug restore followed by a Release build imports the wrong package targets.
+    - name: Restore NuGet packages
+      shell: bash
+      env:
+        CONFIGURATION: ${{ inputs.configuration }}
+        SOLUTION_FILE: ${{ inputs.solution-file }}
+      run: dotnet restore -p:Configuration="$CONFIGURATION" $SOLUTION_FILE
+      working-directory: ${{ inputs.src-folder }}
+
+    - name: Build solution with dotnet CLI
+      shell: bash
+      env:
+        CONFIGURATION: ${{ inputs.configuration }}
+        SOLUTION_FILE: ${{ inputs.solution-file }}
+      run: dotnet build --no-restore --configuration "$CONFIGURATION" $SOLUTION_FILE
+      working-directory: ${{ inputs.src-folder }}
+
+    - name: Pack NuGet packages
+      if: inputs.create-packages == 'true'
+      shell: bash
+      env:
+        CONFIGURATION: ${{ inputs.configuration }}
+        SOLUTION_FILE: ${{ inputs.solution-file }}
+      run: dotnet pack --no-restore --configuration "$CONFIGURATION" $SOLUTION_FILE --m:1
+      working-directory: ${{ inputs.src-folder }}

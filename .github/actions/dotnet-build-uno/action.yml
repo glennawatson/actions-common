@@ -1,0 +1,54 @@
+name: .NET Build (UNO)
+description: UNO/msbuild variant build and pack (Windows only)
+
+inputs:
+  configuration:
+    description: 'Build configuration'
+    required: false
+    default: 'Release'
+  src-folder:
+    description: 'Folder containing the solution'
+    required: false
+    default: 'src'
+  solution-file:
+    description: 'Solution file relative to src-folder'
+    required: false
+    default: ''
+  package-output:
+    description: 'Optional absolute folder the packed packages are written to. Empty = each project''s own output folder.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # SOLUTION_FILE stays unquoted so an empty value passes no argument.
+    # Restore in the build configuration: Uno.Sdk references its DevServer package with assets only when Optimize is
+    # off, and a Debug restore followed by a Release build fails with UNOB0019.
+    - name: Restore NuGet packages
+      shell: bash
+      env:
+        CONFIGURATION: ${{ inputs.configuration }}
+        SOLUTION_FILE: ${{ inputs.solution-file }}
+      run: dotnet restore -p:Configuration="$CONFIGURATION" $SOLUTION_FILE
+      working-directory: ${{ inputs.src-folder }}
+
+    - name: Add MSBuild to PATH (Visual Studio)
+      uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      with:
+        vs-prerelease: true
+
+    # PowerShell resolves msbuild from the PATH setup-msbuild adds; Git Bash did not find it on the Visual Studio 18 image.
+    - name: Build and pack UNO solution with MSBuild
+      shell: pwsh
+      env:
+        CONFIGURATION: ${{ inputs.configuration }}
+        SOLUTION_FILE: ${{ inputs.solution-file }}
+        PACKAGE_OUTPUT: ${{ inputs.package-output }}
+      run: |
+        $arguments = @('/t:build,pack', '/nowarn:MSB4011', '/maxcpucount', '/p:NoPackageAnalysis=true', '/verbosity:minimal', "/p:Configuration=$env:CONFIGURATION")
+        if ($env:PACKAGE_OUTPUT) { $arguments += "/p:PackageOutputPath=$env:PACKAGE_OUTPUT" }
+        if ($env:SOLUTION_FILE) { $arguments += $env:SOLUTION_FILE }
+        msbuild @arguments
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      working-directory: ${{ inputs.src-folder }}

@@ -1,27 +1,38 @@
 name: .NET Environment Setup
 description: |
-  Set up the .NET SDKs and the CLI environment, and stamp the version with MinVer. The version is computed from the
-  latest reachable release tag, or the minver-minimum-major-minor floor when none is reachable.
+  Setup .NET SDK, optional workloads, and version stamping with
+  MinVer. Version is computed from the latest reachable v-prefixed tag (or the
+  minver-minimum-major-minor floor when none is reachable).
+
 inputs:
   dotnet-versions:
-    description: 'Newline-separated list of .NET SDK versions'
+    description: 'Newline-separated list of .NET SDK versions. A job that builds or tests a project passes every SDK it targets.'
     required: false
-    default: |
-      8.0.x
-      10.0.x
-      11.0.x
+    default: '11.0.x'
+  src-folder:
+    description: 'Folder containing the solution'
+    required: false
+    default: 'src'
+  solution-file:
+    description: 'Solution file relative to src-folder'
+    required: false
+    default: ''
+  install-workloads:
+    description: 'Run dotnet workload restore'
+    required: false
+    default: 'false'
   stamp-version:
     description: 'Stamp the version with MinVer. Set false for a job with no checkout, or one that stamps the version itself later.'
     required: false
     default: 'true'
   minver-tag-prefix:
-    description: 'Tag prefix for MinVer. Release tags here are bare (4.2.2), so the default is empty.'
+    description: 'Tag prefix for MinVer (default v).'
+    required: false
+    default: 'v'
+  minver-minimum-major-minor:
+    description: 'MinVer floor major.minor when no tag is reachable (e.g. "1.0"). Empty leaves MinVer at 0.0.'
     required: false
     default: ''
-  minver-minimum-major-minor:
-    description: 'MinVer floor major.minor when no tag is reachable.'
-    required: false
-    default: '1.0'
   minver-default-pre-release-identifiers:
     description: 'MinVer pre-release identifiers for height-only builds.'
     required: false
@@ -29,38 +40,125 @@ inputs:
   minver-auto-increment:
     description: 'MinVer auto-increment segment (major|minor|patch).'
     required: false
-    default: 'patch'
+    default: 'minor'
   minver-version-override:
-    description: 'Exact version to stamp, bypassing the MinVer git walk. Empty = compute from tags as normal.'
+    description: 'Exact version to stamp, bypassing the MinVer git walk (e.g. "11.4.13" for an out-of-sequence / backport release). Empty = compute from tags as normal.'
     required: false
     default: ''
+
 outputs:
-  version-semver2:
-    description: 'MinVer SemVer2 version string.'
+  nbgv-semver2:
+    description: 'MinVer SemVer2 version string. Name kept for backward compatibility with callers that consumed the old nbgv output.'
     value: ${{ steps.minver.outputs.SemVer2 }}
+  version-semver2:
+    description: 'Alias for nbgv-semver2 with a tool-neutral name.'
+    value: ${{ steps.minver.outputs.SemVer2 }}
+
 runs:
   using: composite
   steps:
-  - name: Setup .NET SDK
-    uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
-    with:
-      dotnet-version: ${{ inputs.dotnet-versions }}
-  - name: Configure .NET CLI environment
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
-    with:
-      script-file: ${{ github.action_path }}/scripts/configure--net-cli-environment.cs
-  - name: Configure Windows Defender exclusions
-    if: runner.os == 'Windows'
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
-    with:
-      script-file: ${{ github.action_path }}/scripts/configure-windows-defender-exclusions.cs
-  - name: Stamp version with MinVer
-    id: minver
-    if: inputs.stamp-version == 'true'
-    uses: glennawatson/actions-common/.github/actions/minver@main
-    with:
-      tag-prefix: ${{ inputs.minver-tag-prefix }}
-      minimum-major-minor: ${{ inputs.minver-minimum-major-minor }}
-      default-pre-release-identifiers: ${{ inputs.minver-default-pre-release-identifiers }}
-      auto-increment: ${{ inputs.minver-auto-increment }}
-      version-override: ${{ inputs.minver-version-override }}
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+      with:
+        dotnet-version: ${{ inputs.dotnet-versions }}
+
+    - name: Configure .NET CLI environment
+      shell: bash
+      run: |
+        cd "$RUNNER_TEMP" && dotnet run - <<'CS'
+        using static System.Environment;
+
+        File.AppendAllLines(GetEnvironmentVariable("GITHUB_ENV")!, ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1", "DOTNET_NOLOGO=1", "DOTNET_CLI_TELEMETRY_OPTOUT=1"]);
+        CS
+
+    - name: Configure Windows Defender exclusions
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        cd "$RUNNER_TEMP" && dotnet run - <<'CS'
+        #:package System.Management@*
+        #:property PublishAot=false
+
+        using System.Management;
+        using System.Runtime.Versioning;
+        using static System.Environment;
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // Real-time scanning of build output is a large share of Windows build time. Best-effort.
+        AddExclusions(
+            "ExclusionPath",
+            [
+                GetEnvironmentVariable("GITHUB_WORKSPACE")!,
+                GetEnvironmentVariable("DOTNET_ROOT")!,
+                GetEnvironmentVariable("RUNNER_TEMP")!,
+                Path.Combine(GetFolderPath(SpecialFolder.UserProfile), ".nuget"),
+            ]);
+        AddExclusions("ExclusionProcess", ["dotnet.exe", "MSBuild.exe", "VBCSCompiler.exe"]);
+
+        [SupportedOSPlatform("windows")]
+        static void AddExclusions(string preference, string[] values)
+        {
+            try
+            {
+                using var preferences = new ManagementClass(@"root\Microsoft\Windows\Defender", "MSFT_MpPreference", null);
+                using var parameters = preferences.GetMethodParameters("Add");
+                parameters[preference] = values;
+                preferences.InvokeMethod("Add", parameters, null);
+                Console.WriteLine($"Defender {preference}: {string.Join(", ", values)}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Skipped Defender {preference} ({ex.Message})");
+            }
+        }
+        CS
+
+    - name: Restore .NET Workloads
+      if: inputs.install-workloads == 'true'
+      shell: bash
+      env:
+        SRC_FOLDER: ${{ inputs.src-folder }}
+        SOLUTION_FILE: ${{ inputs.solution-file }}
+      run: |
+        cd "$RUNNER_TEMP" && dotnet run - -- "$SRC_FOLDER" "$SOLUTION_FILE" <<'CS'
+        using System.Diagnostics;
+        using System.Text.Json;
+        using static System.Environment;
+
+        if (args is not [var srcFolder, var solutionFile])
+        {
+            Console.WriteLine("::error::Expected the source folder and solution file arguments.");
+            return 2;
+        }
+
+        Directory.SetCurrentDirectory(Path.Combine(GetEnvironmentVariable("GITHUB_WORKSPACE")!, srcFolder));
+
+        // dotnet workload restore does not read a solution filter, so a filter restores its base solution's workloads.
+        if (solutionFile.EndsWith(".slnf", StringComparison.OrdinalIgnoreCase))
+        {
+            using JsonDocument filter = JsonDocument.Parse(File.ReadAllText(solutionFile));
+            string basePath = filter.RootElement.GetProperty("solution").GetProperty("path").GetString()!;
+            solutionFile = Path.Combine(Path.GetDirectoryName(solutionFile) ?? string.Empty, basePath);
+        }
+
+        IEnumerable<string> solution = solutionFile is not ""
+            ? [solutionFile]
+            : Directory.EnumerateFiles(".", "*.slnx").Concat(Directory.EnumerateFiles(".", "*.sln")).Take(1);
+
+        return Process.Run("dotnet", ["workload", "restore", .. solution, "--from-previous-sdk", "--skip-manifest-update"]).ExitCode;
+        CS
+
+    - name: Stamp version with MinVer
+      id: minver
+      if: inputs.stamp-version == 'true'
+      uses: reactiveui/actions-common/.github/actions/minver@main
+      with:
+        tag-prefix: ${{ inputs.minver-tag-prefix }}
+        minimum-major-minor: ${{ inputs.minver-minimum-major-minor }}
+        default-pre-release-identifiers: ${{ inputs.minver-default-pre-release-identifiers }}
+        auto-increment: ${{ inputs.minver-auto-increment }}
+        version-override: ${{ inputs.minver-version-override }}
