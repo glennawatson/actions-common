@@ -1,3 +1,0 @@
-[*.cs]
-# Command-line verification tools print their results to the console.
-dotnet_diagnostic.SST1449.severity = none
