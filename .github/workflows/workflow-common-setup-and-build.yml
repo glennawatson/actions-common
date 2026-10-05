@@ -57,6 +57,10 @@ on:
         description: JSON array of arguments for the preparation project.
         type: string
         default: '["test"]'
+      linuxPackages:
+        description: Space-separated apt packages to install on Linux runners before building, so preparation code never installs tools itself.
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -83,6 +87,13 @@ jobs:
       uses: glennawatson/actions-common/.github/actions/restore-roslyn-slots@main
       with:
         src-folder: ${{ inputs.srcFolder }}
+    - name: Install Linux packages
+      if: runner.os == 'Linux' && inputs.linuxPackages != ''
+      env:
+        LINUX_PACKAGES: ${{ inputs.linuxPackages }}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
     - name: Prepare tests
       if: inputs.testPreparationFile != ''
       uses: glennawatson/actions-common/.github/actions/run-csharp@main
