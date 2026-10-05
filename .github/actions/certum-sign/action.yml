@@ -1,12 +1,14 @@
-name: Certum SimplySign NuGet signing (prebuilt image)
+name: Certum SimplySign signing (prebuilt image)
 description: |
-  Author-sign .nupkg files with a Certum "Code Signing in the Cloud" certificate.
+  Sign files with a Certum "Code Signing in the Cloud" certificate.
 
   Certum SimplySign has no headless signing API: the cloud key is reachable only
   through the SimplySign Desktop GUI, which exposes it as a PKCS#11 token. This
   action runs that GUI headlessly (Xvfb + xdotool), logs in with the TOTP derived
   from the otpauth URI, then signs each package with jsign over PKCS#11 and
-  verifies the result with `dotnet nuget verify`.
+  verifies NuGet packages with `dotnet nuget verify`. A caller can supply a C#
+  signing script for other artifact formats; that script owns verification and
+  uses the same connected PKCS#11 session.
 
   MUST run inside the prebuilt certum-signer image (ghcr.io/reactiveui/certum-signer),
   which bakes in SimplySign Desktop, jsign, the .NET 10 and 11 SDKs, and the
@@ -17,6 +19,10 @@ description: |
     CERTUM_OTP_URI            otpauth:// URI for the SimplySign TOTP
     CERTUM_CERT_FINGERPRINT   (optional) SHA-256 fingerprint to assert against
 inputs:
+  signing-script:
+    description: 'Optional caller C# script to sign and verify artifacts using the connected PKCS#11 session.'
+    required: false
+    default: ''
   packages-glob:
     description: 'Glob of files to sign (relative to the working directory).'
     required: false
@@ -48,9 +54,19 @@ runs:
     with:
       script-file: ${{ github.action_path }}/scripts/connect-simplysign--headless-login.cs
   - name: Sign packages with jsign + verify
+    if: inputs.signing-script == ''
     env:
       TS_URL: ${{ inputs.timestamp-url }}
       PKG_GLOB: ${{ inputs.packages-glob }}
     uses: glennawatson/actions-common/.github/actions/run-csharp@main
     with:
       script-file: ${{ github.action_path }}/scripts/sign-packages-with-jsign---verify.cs
+  - name: Sign and verify caller artifacts
+    if: inputs.signing-script != ''
+    env:
+      TS_URL: ${{ inputs.timestamp-url }}
+      PKG_GLOB: ${{ inputs.packages-glob }}
+      JSIGN_SCRIPT: ${{ github.action_path }}/scripts/sign-packages-with-jsign---verify.cs
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ inputs.signing-script }}
