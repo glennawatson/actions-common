@@ -9,6 +9,8 @@ const string ScriptFile = "SCRIPT_FILE";
 
 const string ScriptArguments = "SCRIPT_ARGUMENTS";
 
+const string GitHubOutput = "GITHUB_OUTPUT";
+
 const string ExpectedArguments = "one value\nsemi;colon\nliteral $(value)\nliteral $(value)\n";
 
 const int FixtureFailureExitCode = 7;
@@ -30,6 +32,7 @@ try
         #!/usr/bin/env dotnet
         if (args is ["exit7"]) return 7;
         if (args is ["streams"]) { Console.WriteLine("stdout marker"); Console.Error.WriteLine("stderr marker"); return 0; }
+        if (args is ["certificate", var path]) { File.AppendAllLines(Environment.GetEnvironmentVariable("GITHUB_OUTPUT")!, [$"certificate-source={path}"]); return 0; }
         foreach (var value in args) Console.WriteLine(value);
         return 0;
         """);
@@ -62,17 +65,24 @@ try
         && streams.StandardError.Contains("stderr marker", StringComparison.Ordinal),
     "Show the child command and forward both output streams");
     var output = Path.Combine(scratch, "shared.output");
-    var shared = Run(new() { ["SHARED_SCRIPT"] = "resolve-built-commit-sha-c775df1621.cs", ["GITHUB_OUTPUT"] = output, });
+    var shared = Run(new() { ["SHARED_SCRIPT"] = "resolve-built-commit-sha-c775df1621.cs", [GitHubOutput] = output, });
     Check(
     shared.ExitStatus.ExitCode == 0 && File.ReadAllText(output).StartsWith("sha=", StringComparison.Ordinal),
     "Resolve a shared script from the action folder");
+
+    var certificateOutput = Path.Combine(scratch, "certificate.output");
+    var certificatePath = Path.Combine(scratch, "signed payload", "viewer.exe");
+    var certificate = Run(new() { [ScriptFile] = fixture, [ScriptArguments] = $"certificate\n{certificatePath}", [GitHubOutput] = certificateOutput, });
+    Check(
+    certificate.ExitStatus.ExitCode == 0 && File.ReadAllText(certificateOutput).TrimEnd() == $"certificate-source={certificatePath}",
+    "Preserve the signing certificate path in the child output file");
 
     var yaml = new YamlStream();
     using var actionReader = File.OpenText(Path.Combine(action, "action.yml"));
     yaml.Load(actionReader);
     var contract = (YamlMappingNode)yaml.Documents[0].RootNode;
     var outputs = contract.Children.TryGetValue(new YamlScalarNode("outputs"), out var declared) ? (YamlMappingNode)declared : new YamlMappingNode();
-    string[] names = ["sha", "version", "tag", "prerelease", "SemVer2", "SimpleVersion", "NuGetPackageVersion", "GitCommitId", "VersionHeight"];
+    string[] names = ["sha", "version", "tag", "prerelease", "SemVer2", "SimpleVersion", "NuGetPackageVersion", "GitCommitId", "VersionHeight", "certificate-source"];
     var steps = (YamlSequenceNode)((YamlMappingNode)contract.Children[new YamlScalarNode("runs")]).Children[new YamlScalarNode("steps")];
     var hasRunStep = false;
     foreach (var step in steps.Children)
@@ -102,7 +112,7 @@ try
             [ScriptFile] = Path.Combine(root, ".github/actions/minver/scripts/compute-minver-version-and-export-minver-----github-output.cs"),
             ["VERSION_OVERRIDE"] = version,
             ["GITHUB_ENV"] = envFile,
-            ["GITHUB_OUTPUT"] = versionOutput,
+            [GitHubOutput] = versionOutput,
         });
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var line in File.ReadAllLines(versionOutput))
@@ -117,7 +127,7 @@ try
             $"Preserve MinVer output values for {version}");
     }
 
-    Console.WriteLine("8 runner checks passed.");
+    Console.WriteLine("9 runner checks passed.");
     return 0;
 
     ProcessTextOutput Run(Dictionary<string, string> variables)
