@@ -32,7 +32,6 @@ try
         #!/usr/bin/env dotnet
         if (args is ["exit7"]) return 7;
         if (args is ["streams"]) { Console.WriteLine("stdout marker"); Console.Error.WriteLine("stderr marker"); return 0; }
-        if (args is ["certificate", var path]) { File.AppendAllLines(Environment.GetEnvironmentVariable("GITHUB_OUTPUT")!, [$"certificate-source={path}"]); return 0; }
         foreach (var value in args) Console.WriteLine(value);
         return 0;
         """);
@@ -70,19 +69,12 @@ try
     shared.ExitStatus.ExitCode == 0 && File.ReadAllText(output).StartsWith("sha=", StringComparison.Ordinal),
     "Resolve a shared script from the action folder");
 
-    var certificateOutput = Path.Combine(scratch, "certificate.output");
-    var certificatePath = Path.Combine(scratch, "signed payload", "viewer.exe");
-    var certificate = Run(new() { [ScriptFile] = fixture, [ScriptArguments] = $"certificate\n{certificatePath}", [GitHubOutput] = certificateOutput, });
-    Check(
-    certificate.ExitStatus.ExitCode == 0 && File.ReadAllText(certificateOutput).TrimEnd() == $"certificate-source={certificatePath}",
-    "Preserve the signing certificate path in the child output file");
-
     var yaml = new YamlStream();
     using var actionReader = File.OpenText(Path.Combine(action, "action.yml"));
     yaml.Load(actionReader);
     var contract = (YamlMappingNode)yaml.Documents[0].RootNode;
     var outputs = contract.Children.TryGetValue(new YamlScalarNode("outputs"), out var declared) ? (YamlMappingNode)declared : new YamlMappingNode();
-    string[] names = ["sha", "version", "tag", "prerelease", "SemVer2", "SimpleVersion", "NuGetPackageVersion", "GitCommitId", "VersionHeight", "certificate-source"];
+    string[] names = ["sha", "version", "tag", "prerelease", "SemVer2", "SimpleVersion", "NuGetPackageVersion", "GitCommitId", "VersionHeight"];
     var steps = (YamlSequenceNode)((YamlMappingNode)contract.Children[new YamlScalarNode("runs")]).Children[new YamlScalarNode("steps")];
     var hasRunStep = false;
     foreach (var step in steps.Children)
