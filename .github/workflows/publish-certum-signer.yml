@@ -23,12 +23,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           stamp-version: 'false'
 
       - name: Log in to GHCR, build and push image
-        uses: reactiveui/actions-common/.github/actions/container-image-publish@main
+        uses: glennawatson/actions-common/.github/actions/container-image-publish@main
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

@@ -45,7 +45,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           src-folder: ${{ inputs.srcFolder }}
           solution-file: ${{ inputs.solutionFile }}
@@ -59,7 +59,7 @@ jobs:
         run: dotnet restore "$SRC_FOLDER/$SOLUTION_FILE"
 
       - name: Regenerate baselines
-        uses: reactiveui/actions-common/.github/actions/publicapi-regenerate@main
+        uses: glennawatson/actions-common/.github/actions/publicapi-regenerate@main
         with:
           src-dir: ${{ github.workspace }}/${{ inputs.srcFolder }}
           tfm-filter: ${{ inputs.tfmFilter }}

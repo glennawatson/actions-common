@@ -45,7 +45,7 @@ jobs:
       ENTRY: ${{ toJSON(matrix.repository) }}
     steps:
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           stamp-version: 'false'
 
@@ -59,7 +59,7 @@ jobs:
 
       - name: Update dependencies
         id: update
-        uses: reactiveui/actions-common/.github/actions/release-train-update@main
+        uses: glennawatson/actions-common/.github/actions/release-train-update@main
         env:
           APP_CLIENT_ID: ${{ secrets.RELEASE_TRAIN_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.RELEASE_TRAIN_APP_PRIVATE_KEY }}
@@ -72,7 +72,7 @@ jobs:
       - name: Release
         id: release
         if: steps.update.outputs.blocked != 'true'
-        uses: reactiveui/actions-common/.github/actions/release-train-release@main
+        uses: glennawatson/actions-common/.github/actions/release-train-release@main
         env:
           APP_CLIENT_ID: ${{ secrets.RELEASE_TRAIN_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.RELEASE_TRAIN_APP_PRIVATE_KEY }}
@@ -84,14 +84,14 @@ jobs:
       - name: Wait for NuGet
         id: nuget
         if: steps.update.outputs.blocked != 'true'
-        uses: reactiveui/actions-common/.github/actions/release-train-nuget-wait@main
+        uses: glennawatson/actions-common/.github/actions/release-train-nuget-wait@main
         with:
           release-file: ${{ runner.temp }}/train/release.json
           timeout-minutes: ${{ fromJSON(inputs.settings).nugetMinutes }}
 
       - name: Record result
         if: always()
-        uses: reactiveui/actions-common/.github/actions/release-train-record@main
+        uses: glennawatson/actions-common/.github/actions/release-train-record@main
         with:
           name: ${{ matrix.repository.name }}
           repository: ${{ matrix.repository.repository }}

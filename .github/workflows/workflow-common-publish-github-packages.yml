@@ -21,11 +21,11 @@ jobs:
           name: ${{ inputs.artifactName }}
 
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           stamp-version: 'false'
 
       - name: Push to GitHub Packages
-        uses: reactiveui/actions-common/.github/actions/github-packages-push@main
+        uses: glennawatson/actions-common/.github/actions/github-packages-push@main
         env:
           GITHUB_TOKEN: ${{ github.token }}

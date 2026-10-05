@@ -150,7 +150,7 @@ jobs:
     steps:
       - name: Detect changed areas
         id: changes
-        uses: reactiveui/actions-common/.github/actions/detect-changes@main
+        uses: glennawatson/actions-common/.github/actions/detect-changes@main
 
   sonarcloud:
     needs: changes
@@ -173,7 +173,7 @@ jobs:
 
       - name: Setup .NET Environment
         id: environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           dotnet-versions: ${{ inputs.dotnetVersions }}
           src-folder: ${{ inputs.srcFolder }}
@@ -185,7 +185,7 @@ jobs:
           minver-default-pre-release-identifiers: ${{ inputs.minverDefaultPreReleaseIdentifiers }}
 
       - name: SonarCloud begin
-        uses: reactiveui/actions-common/.github/actions/sonarcloud@main
+        uses: glennawatson/actions-common/.github/actions/sonarcloud@main
         with:
           mode: begin
           project-key: ${{ inputs.sonarProjectKey }}
@@ -200,7 +200,7 @@ jobs:
           working-directory: ${{ inputs.srcFolder }}
 
       - name: Build
-        uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-build@main
         with:
           configuration: ${{ inputs.configuration }}
           src-folder: ${{ inputs.srcFolder }}
@@ -211,13 +211,13 @@ jobs:
       # provide. Without it they run no tests and add no coverage.
       - name: Install Windows App Runtime
         if: inputs.installWindowsAppRuntime == true
-        uses: reactiveui/actions-common/.github/actions/windows-app-runtime@main
+        uses: glennawatson/actions-common/.github/actions/windows-app-runtime@main
         with:
           version: ${{ inputs.windowsAppRuntimeVersion }}
 
       - name: Test
         if: inputs.performTests == true
-        uses: reactiveui/actions-common/.github/actions/dotnet-test@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-test@main
         with:
           configuration: ${{ inputs.configuration }}
           src-folder: ${{ inputs.srcFolder }}
@@ -229,7 +229,7 @@ jobs:
       - name: SonarCloud end
         # A failed build or test still uploads partial analysis.
         if: always()
-        uses: reactiveui/actions-common/.github/actions/sonarcloud@main
+        uses: glennawatson/actions-common/.github/actions/sonarcloud@main
         with:
           mode: end
           project-key: ${{ inputs.sonarProjectKey }}

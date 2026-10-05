@@ -81,7 +81,7 @@ jobs:
       - name: Checkout device-tests script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          repository: reactiveui/actions-common
+          repository: glennawatson/actions-common
           ref: ${{ job.workflow_sha }}
           path: .device-tests-tooling
           sparse-checkout: scripts
@@ -103,7 +103,7 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install emulator platform-tools "$SYSTEM_IMAGE"
 
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           dotnet-versions: ${{ inputs.dotnetVersions }}
           src-folder: ${{ inputs.srcFolder }}
@@ -146,14 +146,14 @@ jobs:
       - name: Checkout device-tests script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          repository: reactiveui/actions-common
+          repository: glennawatson/actions-common
           ref: ${{ job.workflow_sha }}
           path: .device-tests-tooling
           sparse-checkout: scripts
           persist-credentials: false
 
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           dotnet-versions: ${{ inputs.dotnetVersions }}
           src-folder: ${{ inputs.srcFolder }}

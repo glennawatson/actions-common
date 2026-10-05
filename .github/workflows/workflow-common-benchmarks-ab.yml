@@ -46,7 +46,7 @@ jobs:
 
     steps:
       - name: Benchmark base
-        uses: reactiveui/actions-common/.github/actions/dotnet-benchmarks@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-benchmarks@main
         with:
           revision: ${{ inputs.base }}
           projects: ${{ inputs.projects }}
@@ -56,7 +56,7 @@ jobs:
           dotnet-versions: ${{ inputs.dotnetVersions }}
 
       - name: Benchmark head
-        uses: reactiveui/actions-common/.github/actions/dotnet-benchmarks@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-benchmarks@main
         with:
           revision: ${{ inputs.head }}
           projects: ${{ inputs.projects }}
@@ -66,7 +66,7 @@ jobs:
           dotnet-versions: ${{ inputs.dotnetVersions }}
 
       - name: Compare base and head
-        uses: reactiveui/actions-common/.github/actions/benchmark-compare@main
+        uses: glennawatson/actions-common/.github/actions/benchmark-compare@main
         with:
           base-folder: ${{ runner.temp }}/benchmark-ab/base
           head-folder: ${{ runner.temp }}/benchmark-ab/head

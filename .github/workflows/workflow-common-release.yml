@@ -137,7 +137,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           dotnet-versions: ${{ inputs.dotnetVersions }}
           src-folder: ${{ inputs.srcFolder }}
@@ -146,7 +146,7 @@ jobs:
           stamp-version: 'false'
 
       - name: Validate version inputs
-        uses: reactiveui/actions-common/.github/actions/release-inputs-validate@main
+        uses: glennawatson/actions-common/.github/actions/release-inputs-validate@main
         with:
           bump: ${{ inputs.bump }}
           pre-release: ${{ inputs.preRelease }}
@@ -156,7 +156,7 @@ jobs:
       - name: Compute version and tag
         if: inputs.bump != '' && inputs.versionOverride == ''
         id: bump
-        uses: reactiveui/actions-common/.github/actions/compute-version-and-tag@main
+        uses: glennawatson/actions-common/.github/actions/compute-version-and-tag@main
         with:
           bump: ${{ inputs.bump }}
           tag-prefix: ${{ inputs.minverTagPrefix }}
@@ -167,7 +167,7 @@ jobs:
       # Also resolves the built commit SHA (honours sourceRef through the checkout).
       - name: Resolve release tag
         id: tagname
-        uses: reactiveui/actions-common/.github/actions/release-tag-resolve@main
+        uses: glennawatson/actions-common/.github/actions/release-tag-resolve@main
         with:
           bump-tag: ${{ steps.bump.outputs.tag }}
           bump-prerelease: ${{ steps.bump.outputs.prerelease }}
@@ -176,7 +176,7 @@ jobs:
 
       - name: Stamp version with MinVer
         id: minver
-        uses: reactiveui/actions-common/.github/actions/minver@main
+        uses: glennawatson/actions-common/.github/actions/minver@main
         with:
           tag-prefix: ${{ inputs.minverTagPrefix }}
           minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
@@ -186,7 +186,7 @@ jobs:
 
       - name: Build (dotnet)
         if: inputs.useUNO == false
-        uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-build@main
         with:
           configuration: ${{ inputs.configuration }}
           src-folder: ${{ inputs.srcFolder }}
@@ -195,7 +195,7 @@ jobs:
 
       - name: Build (UNO)
         if: inputs.useUNO == true
-        uses: reactiveui/actions-common/.github/actions/dotnet-build-uno@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-build-uno@main
         with:
           configuration: ${{ inputs.configuration }}
           src-folder: ${{ inputs.srcFolder }}
@@ -212,7 +212,7 @@ jobs:
 
       - name: Build and pack (MSBuild)
         if: inputs.msbuildSolutionFile != ''
-        uses: reactiveui/actions-common/.github/actions/dotnet-build-uno@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-build-uno@main
         with:
           configuration: ${{ inputs.configuration }}
           src-folder: ${{ inputs.srcFolder }}
@@ -254,7 +254,7 @@ jobs:
           path: signed
 
       - name: Sign packages with Certum SimplySign (prebuilt image)
-        uses: reactiveui/actions-common/.github/actions/certum-sign@main
+        uses: glennawatson/actions-common/.github/actions/certum-sign@main
         with:
           packages-glob: 'signed/*.nupkg'
           timestamp-url: ${{ inputs.signingTimestampUrl }}

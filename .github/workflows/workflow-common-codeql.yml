@@ -68,7 +68,7 @@ jobs:
     steps:
     - name: Detect changed areas
       id: changes
-      uses: reactiveui/actions-common/.github/actions/detect-changes@main
+      uses: glennawatson/actions-common/.github/actions/detect-changes@main
 
   # Code is analysed when code changes and GitHub Actions when .github changes. A skipped job still passes a
   # required check.
@@ -87,7 +87,7 @@ jobs:
         fetch-depth: 0
 
     - name: Setup .NET Environment
-      uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
       with:
         dotnet-versions: ${{ inputs.dotnetVersions }}
         src-folder: ${{ inputs.srcFolder }}
@@ -102,7 +102,7 @@ jobs:
         queries: security-extended
 
     - name: Build
-      uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-build@main
       with:
         configuration: ${{ inputs.configuration }}
         src-folder: ${{ inputs.srcFolder }}

@@ -50,7 +50,7 @@ jobs:
     steps:
       - name: Detect changed areas
         id: changes
-        uses: reactiveui/actions-common/.github/actions/detect-changes@main
+        uses: glennawatson/actions-common/.github/actions/detect-changes@main
 
   aot-smoke:
     name: aot-smoke (${{ matrix.rid }})
@@ -76,7 +76,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup .NET Environment
-        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
         with:
           dotnet-versions: ${{ inputs.dotnetVersions }}
           src-folder: ${{ inputs.srcFolder }}
@@ -99,7 +99,7 @@ jobs:
         run: dotnet publish "$PROJECT_FILE" --configuration "$CONFIGURATION" --runtime "$RID" --output "aot-publish"
 
       - name: Run native AOT smoke test
-        uses: reactiveui/actions-common/.github/actions/aot-smoke-run@main
+        uses: glennawatson/actions-common/.github/actions/aot-smoke-run@main
         with:
           project-file: ${{ inputs.projectFile }}
           executable-name: ${{ inputs.executableName }}
