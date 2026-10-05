@@ -56,7 +56,8 @@ on:
       testPreparationArguments:
         description: JSON array of arguments for the preparation project.
         type: string
-        default: '["test"]'permissions:
+        default: '["test"]'
+permissions:
   contents: read
 jobs:
   build:
