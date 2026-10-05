@@ -1,0 +1,373 @@
+name: RPM build
+description: Build an .rpm from a folder laid out as the installed file tree.
+
+inputs:
+  source:
+    description: 'Folder laid out as the installed tree (for example stage, holding usr/...).'
+    required: true
+  output:
+    description: 'The .rpm to write.'
+    required: true
+  name:
+    description: 'Package name.'
+    required: true
+  version:
+    description: 'Version; a pre-release suffix sorts before the release.'
+    required: true
+  release:
+    description: 'Package release.'
+    required: false
+    default: '1'
+  architecture:
+    description: 'x86_64 or aarch64.'
+    required: true
+  summary:
+    description: 'One-line summary.'
+    required: true
+  description:
+    description: 'Longer description.'
+    required: true
+  license:
+    description: 'Licence name, such as MIT.'
+    required: true
+  url:
+    description: 'Project home page.'
+    required: false
+    default: ''
+  vendor:
+    description: 'Vendor.'
+    required: false
+    default: ''
+  requires:
+    description: 'Required packages, one per line, optionally with a version (name >= 1.0).'
+    required: false
+    default: ''
+  recommends:
+    description: 'Recommended packages, one per line.'
+    required: false
+    default: ''
+  owned-directories:
+    description: 'Directories the package owns, one per line; their subdirectories too. Others, such as /usr/bin, are left to the system.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Build RPM
+      shell: bash
+      env:
+        RPM_SOURCE: ${{ inputs.source }}
+        RPM_OUTPUT: ${{ inputs.output }}
+        RPM_NAME: ${{ inputs.name }}
+        RPM_VERSION: ${{ inputs.version }}
+        RPM_RELEASE: ${{ inputs.release }}
+        RPM_ARCH: ${{ inputs.architecture }}
+        RPM_SUMMARY: ${{ inputs.summary }}
+        RPM_DESCRIPTION: ${{ inputs.description }}
+        RPM_LICENSE: ${{ inputs.license }}
+        RPM_URL: ${{ inputs.url }}
+        RPM_VENDOR: ${{ inputs.vendor }}
+        RPM_REQUIRES: ${{ inputs.requires }}
+        RPM_RECOMMENDS: ${{ inputs.recommends }}
+        RPM_OWNED: ${{ inputs.owned-directories }}
+      run: |
+        cd "$RUNNER_TEMP" && dotnet run - <<'CS'
+        using System.Buffers.Binary;
+        using System.IO.Compression;
+        using System.Security.Cryptography;
+        using System.Text;
+        using static System.Environment;
+
+        // File modes come from the source tree, which needs a Unix file system.
+        if (OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("::error::Build RPMs on a Linux or macOS runner.");
+            return 1;
+        }
+
+        Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE") ?? Directory.GetCurrentDirectory());
+        string Input(string name) => GetEnvironmentVariable(name) ?? string.Empty;
+        string[] Lines(string name) => Input(name).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var source = Path.GetFullPath(Input("RPM_SOURCE"));
+        var name = Input("RPM_NAME");
+        var version = Input("RPM_VERSION").Split('+')[0].Replace('-', '~');
+        var release = Input("RPM_RELEASE");
+        var architecture = Input("RPM_ARCH");
+        var owned = Lines("RPM_OWNED").Select(static path => path.TrimEnd('/')).ToArray();
+        var time = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        // The installed tree: files and symlinks always, directories only when the package owns them.
+        List<Entry> payload = [];
+        foreach (var path in Directory.EnumerateFileSystemEntries(source, "*", SearchOption.AllDirectories))
+        {
+            var installed = "/" + Path.GetRelativePath(source, path).Replace('\\', '/');
+            var info = new FileInfo(path);
+            if (info.LinkTarget is { } target)
+            {
+                payload.Add(new(installed, 0xA000 | 0x1FF, null, target));
+            }
+            else if (Directory.Exists(path))
+            {
+                if (owned.Any(directory => installed == directory || installed.StartsWith(directory + "/", StringComparison.Ordinal)))
+                {
+                    payload.Add(new(installed, 0x4000 | (int)(File.GetUnixFileMode(path) & (UnixFileMode)0xFFF), null, null));
+                }
+            }
+            else
+            {
+                payload.Add(new(installed, 0x8000 | (int)(File.GetUnixFileMode(path) & (UnixFileMode)0xFFF), path, null));
+            }
+        }
+
+        payload.Sort(static (left, right) => string.CompareOrdinal(left.Path, right.Path));
+
+        // gzip compressed cpio (newc) payload.
+        using var cpio = new MemoryStream();
+        for (var i = 0; i < payload.Count; i++)
+        {
+            var entry = payload[i];
+            var content = entry.Source is { } file ? File.ReadAllBytes(file) : entry.Target is { } link ? Encoding.UTF8.GetBytes(link) : [];
+            WriteCpio(cpio, $".{entry.Path}", i + 1, entry.Mode, entry.IsDirectory ? 2 : 1, content, time);
+        }
+
+        WriteCpio(cpio, "TRAILER!!!", 0, 0, 1, [], 0);
+        var uncompressed = cpio.ToArray();
+        using var gzipped = new MemoryStream();
+        using (var gzip = new GZipStream(gzipped, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            gzip.Write(uncompressed);
+        }
+
+        var compressed = gzipped.ToArray();
+
+        // Main header.
+        var header = new Header();
+        header.Strings(100, ["C"]);
+        header.String(1000, name);
+        header.String(1001, version);
+        header.String(1002, release);
+        header.I18n(1004, Input("RPM_SUMMARY"));
+        header.I18n(1005, Input("RPM_DESCRIPTION"));
+        header.Int32(1006, time);
+        header.String(1007, "localhost");
+        header.Int32(1009, (int)payload.Sum(static entry => entry.Length));
+        if (Input("RPM_VENDOR") is { Length: > 0 } vendor)
+        {
+            header.String(1011, vendor);
+        }
+
+        header.String(1014, Input("RPM_LICENSE"));
+        header.I18n(1016, "Unspecified");
+        if (Input("RPM_URL") is { Length: > 0 } url)
+        {
+            header.String(1020, url);
+        }
+
+        header.String(1021, "linux");
+        header.String(1022, architecture);
+        header.String(1124, "cpio");
+        header.String(1125, "gzip");
+        header.String(1126, "9");
+        header.Int32(5011, 8);
+        header.Strings(5092, [Convert.ToHexStringLower(SHA256.HashData(compressed))]);
+        header.Int32(5093, 8);
+        header.Strings(5097, [Convert.ToHexStringLower(SHA256.HashData(uncompressed))]);
+
+        List<string> directories = [];
+        var directoryIndexes = new int[payload.Count];
+        var baseNames = new string[payload.Count];
+        for (var i = 0; i < payload.Count; i++)
+        {
+            var split = payload[i].Path.LastIndexOf('/') + 1;
+            var directory = payload[i].Path[..split];
+            directoryIndexes[i] = directories.IndexOf(directory) is >= 0 and var known ? known : AddDirectory(directories, directory);
+            baseNames[i] = payload[i].Path[split..];
+        }
+
+        header.Int32(1028, [.. payload.Select(static entry => entry.IsDirectory ? 4096 : (int)entry.Length)]);
+        header.Int16(1030, [.. payload.Select(static entry => entry.Mode)]);
+        header.Int16(1033, new int[payload.Count]);
+        header.Int32(1034, [.. payload.Select(_ => time)]);
+        header.Strings(1035, [.. payload.Select(static entry => entry.Source is { } file ? Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(file))) : string.Empty)]);
+        header.Strings(1036, [.. payload.Select(static entry => entry.Target ?? string.Empty)]);
+        header.Int32(1037, [.. payload.Select(static entry => entry.Source is not null && entry.Path.StartsWith("/usr/share/licenses/", StringComparison.Ordinal) ? 1 << 7 : 0)]);
+        header.Strings(1039, [.. payload.Select(_ => "root")]);
+        header.Strings(1040, [.. payload.Select(_ => "root")]);
+        header.Int32(1095, [.. payload.Select(_ => 1)]);
+        header.Int32(1096, [.. Enumerable.Range(1, payload.Count)]);
+        header.Strings(1097, [.. payload.Select(_ => string.Empty)]);
+        header.Int32(1116, directoryIndexes);
+        header.Strings(1117, baseNames);
+        header.Strings(1118, [.. directories]);
+
+        // Provides itself; requires the rpmlib features this layout uses, then the requested packages.
+        header.Strings(1047, [name]);
+        header.Int32(1112, [8]);
+        header.Strings(1113, [$"{version}-{release}"]);
+        List<(string Name, int Flags, string Version)> requires =
+        [
+            ("rpmlib(PayloadFilesHavePrefix)", (1 << 24) | 10, "4.0-1"),
+            ("rpmlib(CompressedFileNames)", (1 << 24) | 10, "3.0.4-1"),
+            ("rpmlib(FileDigests)", (1 << 24) | 10, "4.6.0-1"),
+        ];
+        requires.AddRange(Lines("RPM_REQUIRES").Select(Dependency));
+        header.Int32(1048, [.. requires.Select(static item => item.Flags)]);
+        header.Strings(1049, [.. requires.Select(static item => item.Name)]);
+        header.Strings(1050, [.. requires.Select(static item => item.Version)]);
+        if (Lines("RPM_RECOMMENDS") is { Length: > 0 } recommends)
+        {
+            var parsed = recommends.Select(Dependency).ToArray();
+            header.Strings(5046, [.. parsed.Select(static item => item.Name)]);
+            header.Strings(5047, [.. parsed.Select(static item => item.Version)]);
+            header.Int32(5048, [.. parsed.Select(static item => item.Flags)]);
+        }
+
+        var headerBytes = header.Write(63);
+        var signature = new Header();
+        signature.String(273, Convert.ToHexStringLower(SHA256.HashData(headerBytes)));
+        signature.Int32(1000, headerBytes.Length + compressed.Length);
+        signature.Int32(1007, uncompressed.Length);
+        var signatureBytes = signature.Write(62);
+
+        // 96 byte lead: magic, version 3, binary package, architecture, name, Linux, header-style signature.
+        var lead = new byte[96];
+        BinaryPrimitives.WriteUInt32BigEndian(lead, 0xEDABEEDB);
+        lead[4] = 3;
+        BinaryPrimitives.WriteUInt16BigEndian(lead.AsSpan(8), (ushort)(architecture == "x86_64" ? 1 : 19));
+        var leadName = Encoding.ASCII.GetBytes($"{name}-{version}-{release}");
+        leadName.AsSpan(0, Math.Min(leadName.Length, 65)).CopyTo(lead.AsSpan(10));
+        BinaryPrimitives.WriteUInt16BigEndian(lead.AsSpan(76), 1);
+        BinaryPrimitives.WriteUInt16BigEndian(lead.AsSpan(78), 5);
+
+        var output = Input("RPM_OUTPUT");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
+        using (var package = File.Create(output))
+        {
+            package.Write(lead);
+            package.Write(signatureBytes);
+            package.Write(new byte[(8 - (signatureBytes.Length % 8)) % 8]);
+            package.Write(headerBytes);
+            package.Write(compressed);
+        }
+
+        Console.WriteLine($"Built {output}: {payload.Count} entries.");
+        return 0;
+
+        static int AddDirectory(List<string> directories, string directory)
+        {
+            directories.Add(directory);
+            return directories.Count - 1;
+        }
+
+        // "name", or "name OP version" with OP one of < <= = >= >.
+        static (string Name, int Flags, string Version) Dependency(string line)
+        {
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 3)
+            {
+                return (line, 0, string.Empty);
+            }
+
+            var flags = parts[1] switch { "<" => 2, "<=" => 10, "=" => 8, ">=" => 12, ">" => 4, _ => throw new ArgumentException($"Unknown operator in '{line}'.") };
+            return (parts[0], flags, parts[2]);
+        }
+
+        static void WriteCpio(Stream output, string name, int inode, int mode, int links, byte[] content, int time)
+        {
+            var nameBytes = Encoding.UTF8.GetBytes(name);
+            output.Write(Encoding.ASCII.GetBytes($"070701{inode:X8}{mode:X8}{0:X8}{0:X8}{links:X8}{time:X8}{content.Length:X8}{0:X8}{0:X8}{0:X8}{0:X8}{nameBytes.Length + 1:X8}{0:X8}"));
+            output.Write(nameBytes);
+            output.WriteByte(0);
+            output.Write(new byte[(4 - ((110 + nameBytes.Length + 1) % 4)) % 4]);
+            output.Write(content);
+            output.Write(new byte[(4 - (content.Length % 4)) % 4]);
+        }
+
+        internal sealed record Entry(string Path, int Mode, string? Source, string? Target)
+        {
+            public bool IsDirectory => (Mode & 0xF000) == 0x4000;
+
+            public long Length => Source is { } file ? new FileInfo(file).Length : Target is { } link ? Encoding.UTF8.GetByteCount(link) : 0;
+        }
+
+        // An RPM header: entries sorted by tag, in a region that covers them all.
+        internal sealed class Header
+        {
+            private readonly SortedDictionary<int, (int Type, int Count, byte[] Data)> _entries = [];
+
+            public void String(int tag, string value) => _entries[tag] = (6, 1, Encoding.UTF8.GetBytes($"{value}\0"));
+
+            public void I18n(int tag, string value) => _entries[tag] = (9, 1, Encoding.UTF8.GetBytes($"{value}\0"));
+
+            public void Strings(int tag, string[] values) => _entries[tag] = (8, values.Length, Encoding.UTF8.GetBytes(string.Concat(values.Select(static value => $"{value}\0"))));
+
+            public void Int32(int tag, params int[] values)
+            {
+                var data = new byte[values.Length * 4];
+                for (var i = 0; i < values.Length; i++)
+                {
+                    BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(i * 4), values[i]);
+                }
+
+                _entries[tag] = (4, values.Length, data);
+            }
+
+            public void Int16(int tag, int[] values)
+            {
+                var data = new byte[values.Length * 2];
+                for (var i = 0; i < values.Length; i++)
+                {
+                    BinaryPrimitives.WriteUInt16BigEndian(data.AsSpan(i * 2), (ushort)values[i]);
+                }
+
+                _entries[tag] = (3, values.Length, data);
+            }
+
+            public byte[] Write(int region)
+            {
+                using var store = new MemoryStream();
+                List<(int Tag, int Type, int Offset, int Count)> index = [];
+                foreach (var (tag, (type, count, data)) in _entries)
+                {
+                    var alignment = type switch { 3 => 2, 4 => 4, _ => 1 };
+                    while (store.Length % alignment != 0)
+                    {
+                        store.WriteByte(0);
+                    }
+
+                    index.Add((tag, type, (int)store.Length, count));
+                    store.Write(data);
+                }
+
+                var regionOffset = (int)store.Length;
+                var total = index.Count + 1;
+                WriteEntry(store, region, 7, -(total * 16), 16);
+                using var output = new MemoryStream();
+                output.Write([0x8E, 0xAD, 0xE8, 0x01, 0, 0, 0, 0]);
+                Span<byte> counts = stackalloc byte[8];
+                BinaryPrimitives.WriteInt32BigEndian(counts, total);
+                BinaryPrimitives.WriteInt32BigEndian(counts[4..], (int)store.Length);
+                output.Write(counts);
+                WriteEntry(output, region, 7, regionOffset, 16);
+                foreach (var (tag, type, offset, count) in index)
+                {
+                    WriteEntry(output, tag, type, offset, count);
+                }
+
+                output.Write(store.ToArray());
+                return output.ToArray();
+            }
+
+            private static void WriteEntry(Stream output, int tag, int type, int offset, int count)
+            {
+                Span<byte> entry = stackalloc byte[16];
+                BinaryPrimitives.WriteInt32BigEndian(entry, tag);
+                BinaryPrimitives.WriteInt32BigEndian(entry[4..], type);
+                BinaryPrimitives.WriteInt32BigEndian(entry[8..], offset);
+                BinaryPrimitives.WriteInt32BigEndian(entry[12..], count);
+                output.Write(entry);
+            }
+        }
+        CS

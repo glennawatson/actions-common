@@ -1,0 +1,184 @@
+name: DEB build
+description: Build a .deb from a folder laid out as the installed file tree.
+
+inputs:
+  source:
+    description: 'Folder laid out as the installed tree (for example stage, holding usr/...).'
+    required: true
+  output:
+    description: 'The .deb to write.'
+    required: true
+  name:
+    description: 'Package name.'
+    required: true
+  version:
+    description: 'Version; a pre-release suffix sorts before the release.'
+    required: true
+  architecture:
+    description: 'amd64 or arm64.'
+    required: true
+  maintainer:
+    description: 'Maintainer, such as "Name <email>".'
+    required: true
+  summary:
+    description: 'One-line summary.'
+    required: true
+  description:
+    description: 'Longer description.'
+    required: true
+  homepage:
+    description: 'Project home page.'
+    required: false
+    default: ''
+  section:
+    description: 'Debian section.'
+    required: false
+    default: 'misc'
+  depends:
+    description: 'Dependencies, one per line (alternatives with |).'
+    required: false
+    default: ''
+  recommends:
+    description: 'Recommended packages, one per line.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Build DEB
+      shell: bash
+      env:
+        DEB_SOURCE: ${{ inputs.source }}
+        DEB_OUTPUT: ${{ inputs.output }}
+        DEB_NAME: ${{ inputs.name }}
+        DEB_VERSION: ${{ inputs.version }}
+        DEB_ARCH: ${{ inputs.architecture }}
+        DEB_MAINTAINER: ${{ inputs.maintainer }}
+        DEB_SUMMARY: ${{ inputs.summary }}
+        DEB_DESCRIPTION: ${{ inputs.description }}
+        DEB_HOMEPAGE: ${{ inputs.homepage }}
+        DEB_SECTION: ${{ inputs.section }}
+        DEB_DEPENDS: ${{ inputs.depends }}
+        DEB_RECOMMENDS: ${{ inputs.recommends }}
+      run: |
+        cd "$RUNNER_TEMP" && dotnet run - <<'CS'
+        using System.Formats.Tar;
+        using System.IO.Compression;
+        using System.Text;
+        using static System.Environment;
+
+        // File modes come from the source tree, which needs a Unix file system.
+        if (OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("::error::Build DEBs on a Linux or macOS runner.");
+            return 1;
+        }
+
+        Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE") ?? Directory.GetCurrentDirectory());
+        string Input(string name) => GetEnvironmentVariable(name) ?? string.Empty;
+        string[] Lines(string name) => Input(name).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var source = Path.GetFullPath(Input("DEB_SOURCE"));
+        var modified = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        string[] entries = [.. Directory.EnumerateFileSystemEntries(source, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal)];
+
+        // data.tar.gz: every directory, file and symlink of the tree, owned by root.
+        long installedSize = 0;
+        using var data = new MemoryStream();
+        using (var gzip = new GZipStream(data, CompressionLevel.SmallestSize, leaveOpen: true))
+        using (var tar = new TarWriter(gzip, TarEntryFormat.Ustar, leaveOpen: true))
+        {
+            tar.WriteEntry(Entry(TarEntryType.Directory, "./", UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute, modified));
+            foreach (var path in entries)
+            {
+                var name = "./" + Path.GetRelativePath(source, path).Replace('\\', '/');
+                var info = new FileInfo(path);
+                if (info.LinkTarget is { } target)
+                {
+                    var link = Entry(TarEntryType.SymbolicLink, name, (UnixFileMode)0x1FF, modified);
+                    link.LinkName = target;
+                    tar.WriteEntry(link);
+                }
+                else if (Directory.Exists(path))
+                {
+                    tar.WriteEntry(Entry(TarEntryType.Directory, name + "/", File.GetUnixFileMode(path), modified));
+                }
+                else
+                {
+                    using var content = File.OpenRead(path);
+                    var file = Entry(TarEntryType.RegularFile, name, File.GetUnixFileMode(path), modified);
+                    file.DataStream = content;
+                    tar.WriteEntry(file);
+                    installedSize += info.Length;
+                }
+            }
+        }
+
+        var control = new StringBuilder();
+        control.Append("Package: ").Append(Input("DEB_NAME")).Append('\n');
+        control.Append("Version: ").Append(Input("DEB_VERSION").Split('+')[0].Replace('-', '~')).Append('\n');
+        control.Append("Architecture: ").Append(Input("DEB_ARCH")).Append('\n');
+        control.Append("Maintainer: ").Append(Input("DEB_MAINTAINER")).Append('\n');
+        control.Append("Installed-Size: ").Append((installedSize + 1023) / 1024).Append('\n');
+        if (Lines("DEB_DEPENDS") is { Length: > 0 } depends)
+        {
+            control.Append("Depends: ").AppendJoin(", ", depends).Append('\n');
+        }
+
+        if (Lines("DEB_RECOMMENDS") is { Length: > 0 } recommends)
+        {
+            control.Append("Recommends: ").AppendJoin(", ", recommends).Append('\n');
+        }
+
+        control.Append("Section: ").Append(Input("DEB_SECTION")).Append("\nPriority: optional\n");
+        if (Input("DEB_HOMEPAGE") is { Length: > 0 } homepage)
+        {
+            control.Append("Homepage: ").Append(homepage).Append('\n');
+        }
+
+        // The long description is indented one space, with a lone "." standing for a blank line.
+        control.Append("Description: ").Append(Input("DEB_SUMMARY")).Append('\n');
+        foreach (var line in Input("DEB_DESCRIPTION").Split('\n'))
+        {
+            control.Append(' ').Append(line.Trim().Length == 0 ? "." : line.TrimEnd()).Append('\n');
+        }
+
+        using var controlArchive = new MemoryStream();
+        using (var gzip = new GZipStream(controlArchive, CompressionLevel.SmallestSize, leaveOpen: true))
+        using (var tar = new TarWriter(gzip, TarEntryFormat.Ustar, leaveOpen: true))
+        {
+            using var content = new MemoryStream(Encoding.UTF8.GetBytes(control.ToString()));
+            var file = Entry(TarEntryType.RegularFile, "./control", UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead, modified);
+            file.DataStream = content;
+            tar.WriteEntry(file);
+        }
+
+        // The .deb is an ar archive: debian-binary, then the control and data archives.
+        var output = Input("DEB_OUTPUT");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
+        using (var package = File.Create(output))
+        {
+            package.Write("!<arch>\n"u8);
+            Member(package, "debian-binary", "2.0\n"u8.ToArray(), modified);
+            Member(package, "control.tar.gz", controlArchive.ToArray(), modified);
+            Member(package, "data.tar.gz", data.ToArray(), modified);
+        }
+
+        Console.WriteLine($"Built {output}: {entries.Length} entries.");
+        return 0;
+
+        static UstarTarEntry Entry(TarEntryType type, string name, UnixFileMode mode, DateTimeOffset modified) =>
+            new(type, name) { Mode = mode, UserName = "root", GroupName = "root", ModificationTime = modified };
+
+        static void Member(Stream output, string name, byte[] content, DateTimeOffset modified)
+        {
+            var header = $"{name,-16}{modified.ToUnixTimeSeconds(),-12}{0,-6}{0,-6}{"100644",-8}{content.Length,-10}`\n";
+            output.Write(Encoding.ASCII.GetBytes(header));
+            output.Write(content);
+            if (content.Length % 2 != 0)
+            {
+                output.WriteByte((byte)'\n');
+            }
+        }
+        CS
