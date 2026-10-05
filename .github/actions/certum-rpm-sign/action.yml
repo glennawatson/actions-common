@@ -1,0 +1,327 @@
+name: Certum SimplySign RPM file signing (prebuilt image)
+description: |
+  Add IMA file signatures to .rpm packages with a Certum "Code Signing in the Cloud" certificate.
+
+  Each regular file's SHA-256 digest, already recorded in the RPM header, is signed by the SimplySign token through
+  PKCS#11 and stored as RPMTAG_FILESIGNATURES, the same IMA signatures `rpmsign --signfiles` writes. The header
+  digests are then recomputed, so `rpm -K` still verifies the package. rpm-plugin-ima writes the signatures to each
+  installed file's security.ima attribute for the kernel's IMA to appraise against the certificate.
+
+  MUST run inside the prebuilt certum-signer image (ghcr.io/reactiveui/certum-signer). Map these secrets into env on
+  the calling job:
+    CERTUM_USER_ID            SimplySign login id
+    CERTUM_OTP_URI            otpauth:// URI for the SimplySign TOTP
+
+inputs:
+  packages-glob:
+    description: 'Glob of .rpm files to sign (relative to the working directory).'
+    required: false
+    default: 'signed/*.rpm'
+  launch-seconds:
+    description: 'Seconds to wait after launching SimplySign before driving the UI.'
+    required: false
+    default: '20'
+
+runs:
+  using: composite
+  steps:
+    - name: Connect SimplySign
+      uses: glennawatson/actions-common/.github/actions/certum-connect@main
+      with:
+        launch-seconds: ${{ inputs.launch-seconds }}
+
+    - name: Sign RPM files with the token
+      shell: bash
+      env:
+        PKG_GLOB: ${{ inputs.packages-glob }}
+      run: |
+        cd "$RUNNER_TEMP" && dotnet run - -- "$PKG_GLOB" <<'CS'
+        #:package Pkcs11Interop@5.3.0
+        using System.Buffers.Binary;
+        using System.Security.Cryptography;
+        using System.Text;
+        using Net.Pkcs11Interop.Common;
+        using Net.Pkcs11Interop.HighLevelAPI;
+        using static System.Environment;
+
+        if (args is not [var packagesGlob])
+        {
+            Console.WriteLine("::error::Expected the packages glob argument.");
+            return 2;
+        }
+
+        if (GetEnvironmentVariable("SS_PKCS11") is not { Length: > 0 } module)
+        {
+            Console.WriteLine("::error::SS_PKCS11 is not set; run certum-connect first.");
+            return 1;
+        }
+
+        Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE")!);
+        var folder = Path.GetDirectoryName(packagesGlob) is { Length: > 0 } directory ? directory : ".";
+        string[] packages = Directory.Exists(folder) ? [.. Directory.GetFiles(folder, Path.GetFileName(packagesGlob)).Order(StringComparer.Ordinal)] : [];
+        if (packages is [])
+        {
+            Console.WriteLine($"::error::no packages matched: {packagesGlob}");
+            return 1;
+        }
+
+        var factories = new Pkcs11InteropFactories();
+        using var library = factories.Pkcs11LibraryFactory.LoadPkcs11Library(factories, module, AppType.MultiThreaded);
+        using var session = library.GetSlotList(SlotsType.WithTokenPresent)[0].OpenSession(SessionType.ReadOnly);
+
+        // jsign opens this keystore with an empty password, so the same empty login is used here.
+        try
+        {
+            session.Login(CKU.CKU_USER, string.Empty);
+        }
+        catch (Pkcs11Exception ex) when (ex.RV == CKR.CKR_USER_ALREADY_LOGGED_IN)
+        {
+        }
+
+        // The token can report no key for a few seconds after login, as jsign also finds, so the search is retried.
+        IObjectHandle? key = null;
+        for (var attempt = 1; key is null; attempt++)
+        {
+            key = session.FindAllObjects([session.Factories.ObjectAttributeFactory.Create(CKA.CKA_CLASS, CKO.CKO_PRIVATE_KEY)]).FirstOrDefault();
+            if (key is null)
+            {
+                if (attempt is 15)
+                {
+                    Console.WriteLine("::error::the token exposed no private key");
+                    return 1;
+                }
+
+                Console.WriteLine($"token key not available yet (attempt {attempt})");
+                Thread.Sleep(TimeSpan.FromSeconds(4));
+            }
+        }
+
+        var publicKey = session.GetAttributeValue(key, [CKA.CKA_MODULUS, CKA.CKA_PUBLIC_EXPONENT]);
+        using var rsa = RSA.Create(new RSAParameters { Modulus = publicKey[0].GetValueAsByteArray(), Exponent = publicKey[1].GetValueAsByteArray() });
+
+        // The IMA key id is the last four bytes of the certificate's Subject Key Identifier, the SHA-1 of its public key.
+        var keyId = SHA1.HashData(rsa.ExportRSAPublicKey())[^4..];
+        var mechanism = session.Factories.MechanismFactory.Create(CKM.CKM_RSA_PKCS);
+        foreach (var package in packages)
+        {
+            Console.WriteLine($"::group::sign files in {package}");
+            var signed = RpmIma.Sign(package, keyId, digestInfo =>
+            {
+                var signature = session.Sign(mechanism, key, digestInfo);
+                if (!rsa.VerifyHash(digestInfo[^32..], signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
+                {
+                    throw new CryptographicException($"The token's signature in {package} does not verify against its public key.");
+                }
+
+                return signature;
+            });
+            Console.WriteLine($"signed {signed} files with key id {Convert.ToHexStringLower(keyId)}");
+            Console.WriteLine("::endgroup::");
+        }
+
+        return 0;
+
+        /// <summary>Adds IMA file signatures to an RPM and recomputes its header digests.</summary>
+        internal static class RpmIma
+        {
+            internal const int LeadLength = 96;
+            internal const int TagFileDigests = 1035;
+            internal const int TagFileSignatures = 5090;
+            internal const int TagFileSignatureLength = 5091;
+            private const int TagFileDigestAlgo = 5011;
+            private const int DigestAlgoSha256 = 8;
+            private const int RegionSignatures = 62;
+            private const int RegionImmutable = 63;
+            private const int TypeInt32 = 4;
+            private const int TypeBinary = 7;
+            private const int TypeString = 6;
+            private const int TypeStringArray = 8;
+            private const int IndexEntryLength = 16;
+
+            // DigestInfo for SHA-256, which PKCS#1 v1.5 signing places before the digest.
+            private static readonly byte[] Sha256DigestInfo = Convert.FromHexString("3031300d060960864801650304020105000420");
+
+            /// <summary>Signs every regular file's digest and rewrites the package in place.</summary>
+            internal static int Sign(string path, byte[] keyId, Func<byte[], byte[]> sign)
+            {
+                var file = File.ReadAllBytes(path);
+                var signatureLength = HeaderLength(file, LeadLength);
+                var headerStart = LeadLength + signatureLength + ((8 - (signatureLength % 8)) % 8);
+                var headerLength = HeaderLength(file, headerStart);
+                var payload = file.AsMemory(headerStart + headerLength);
+                var signature = ReadHeader(file.AsSpan(LeadLength, signatureLength));
+                var header = ReadHeader(file.AsSpan(headerStart, headerLength));
+                if (!header.TryGetValue(TagFileDigestAlgo, out var algo) || BinaryPrimitives.ReadInt32BigEndian(algo.Data) != DigestAlgoSha256)
+                {
+                    throw new InvalidDataException($"{path} does not record SHA-256 file digests.");
+                }
+
+                var digests = Strings(header[TagFileDigests]);
+                var signatures = new string[digests.Length];
+                var longest = 0;
+                var count = 0;
+                for (var i = 0; i < digests.Length; i++)
+                {
+                    if (digests[i].Length == 0)
+                    {
+                        signatures[i] = string.Empty;
+                        continue;
+                    }
+
+                    var value = sign([.. Sha256DigestInfo, .. Convert.FromHexString(digests[i])]);
+
+                    // IMA signature, version 2: xattr type, version, hash algorithm (4 = SHA-256), key id, big-endian size, signature.
+                    byte[] ima = [3, 2, 4, .. keyId, (byte)(value.Length >> 8), (byte)value.Length, .. value];
+                    signatures[i] = Convert.ToHexStringLower(ima);
+                    longest = Math.Max(longest, ima.Length);
+                    count++;
+                }
+
+                header[TagFileSignatures] = StringArray(signatures);
+                header[TagFileSignatureLength] = Int32(longest);
+                var headerBytes = WriteHeader(header, RegionImmutable);
+
+                // The header changed, so its digests and the size are recomputed; old OpenPGP signatures would no longer verify.
+                foreach (var stale in (ReadOnlySpan<int>)[267, 268, 1002, 1005])
+                {
+                    _ = signature.Remove(stale);
+                }
+
+                signature[273] = String(Convert.ToHexStringLower(SHA256.HashData(headerBytes)));
+                if (signature.ContainsKey(269))
+                {
+                    signature[269] = String(Convert.ToHexStringLower(SHA1.HashData(headerBytes)));
+                }
+
+                if (signature.ContainsKey(1004))
+                {
+                    using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+                    md5.AppendData(headerBytes);
+                    md5.AppendData(payload.Span);
+                    signature[1004] = new(TypeBinary, 16, md5.GetHashAndReset());
+                }
+
+                signature[1000] = Int32(headerBytes.Length + payload.Length);
+                var signatureBytes = WriteHeader(signature, RegionSignatures);
+
+                using var package = File.Create(path);
+                package.Write(file.AsSpan(0, LeadLength));
+                package.Write(signatureBytes);
+                package.Write(new byte[(8 - (signatureBytes.Length % 8)) % 8]);
+                package.Write(headerBytes);
+                package.Write(payload.Span);
+                return count;
+            }
+
+            /// <summary>The length of the header at an offset: magic, counts, index and store.</summary>
+            internal static int HeaderLength(byte[] file, int start) =>
+                IndexEntryLength + (BinaryPrimitives.ReadInt32BigEndian(file.AsSpan(start + 8)) * IndexEntryLength) + BinaryPrimitives.ReadInt32BigEndian(file.AsSpan(start + 12));
+
+            /// <summary>Reads a header's entries, leaving out its region tag, which is written afresh.</summary>
+            internal static SortedDictionary<int, Entry> ReadHeader(ReadOnlySpan<byte> header)
+            {
+                var count = BinaryPrimitives.ReadInt32BigEndian(header[8..]);
+                var store = header[(IndexEntryLength + (count * IndexEntryLength))..];
+                var entries = new SortedDictionary<int, Entry>();
+                for (var i = 0; i < count; i++)
+                {
+                    var index = header.Slice(IndexEntryLength + (i * IndexEntryLength), IndexEntryLength);
+                    var tag = BinaryPrimitives.ReadInt32BigEndian(index);
+                    var type = BinaryPrimitives.ReadInt32BigEndian(index[4..]);
+                    var offset = BinaryPrimitives.ReadInt32BigEndian(index[8..]);
+                    var values = BinaryPrimitives.ReadInt32BigEndian(index[12..]);
+                    if (tag is RegionSignatures or RegionImmutable or 61)
+                    {
+                        continue;
+                    }
+
+                    var data = store[offset..];
+                    var length = type switch
+                    {
+                        1 or 2 or TypeBinary => values,
+                        3 => values * 2,
+                        TypeInt32 => values * 4,
+                        5 => values * 8,
+                        TypeString => data.IndexOf((byte)0) + 1,
+                        _ => StringsLength(data, values),
+                    };
+                    entries[tag] = new(type, values, data[..length].ToArray());
+                }
+
+                return entries;
+            }
+
+            /// <summary>Decodes a string array entry.</summary>
+            internal static string[] Strings(Entry entry) => Encoding.UTF8.GetString(entry.Data).Split('\0')[..entry.Count];
+
+            private static int StringsLength(ReadOnlySpan<byte> data, int count)
+            {
+                var length = 0;
+                for (var i = 0; i < count; i++)
+                {
+                    length += data[length..].IndexOf((byte)0) + 1;
+                }
+
+                return length;
+            }
+
+            private static Entry String(string value) => new(TypeString, 1, Encoding.UTF8.GetBytes($"{value}\0"));
+
+            private static Entry StringArray(string[] values) => new(TypeStringArray, values.Length, Encoding.UTF8.GetBytes(string.Concat(values.Select(static value => $"{value}\0"))));
+
+            private static Entry Int32(int value)
+            {
+                var data = new byte[4];
+                BinaryPrimitives.WriteInt32BigEndian(data, value);
+                return new(TypeInt32, 1, data);
+            }
+
+            /// <summary>Writes entries as a header whose region covers all of them.</summary>
+            private static byte[] WriteHeader(SortedDictionary<int, Entry> entries, int region)
+            {
+                using var store = new MemoryStream();
+                var index = new List<(int Tag, int Type, int Offset, int Count)>();
+                foreach (var (tag, entry) in entries)
+                {
+                    var alignment = entry.Type switch { 3 => 2, TypeInt32 => 4, 5 => 8, _ => 1 };
+                    while (store.Length % alignment != 0)
+                    {
+                        store.WriteByte(0);
+                    }
+
+                    index.Add((tag, entry.Type, (int)store.Length, entry.Count));
+                    store.Write(entry.Data);
+                }
+
+                var regionOffset = (int)store.Length;
+                var total = index.Count + 1;
+                Write(store, region, TypeBinary, -(total * IndexEntryLength), IndexEntryLength);
+                using var output = new MemoryStream();
+                output.Write([0x8E, 0xAD, 0xE8, 0x01, 0, 0, 0, 0]);
+                Span<byte> counts = stackalloc byte[8];
+                BinaryPrimitives.WriteInt32BigEndian(counts, total);
+                BinaryPrimitives.WriteInt32BigEndian(counts[4..], (int)store.Length);
+                output.Write(counts);
+                Write(output, region, TypeBinary, regionOffset, IndexEntryLength);
+                foreach (var (tag, type, offset, count) in index)
+                {
+                    Write(output, tag, type, offset, count);
+                }
+
+                output.Write(store.ToArray());
+                return output.ToArray();
+            }
+
+            private static void Write(Stream output, int tag, int type, int offset, int count)
+            {
+                Span<byte> entry = stackalloc byte[IndexEntryLength];
+                BinaryPrimitives.WriteInt32BigEndian(entry, tag);
+                BinaryPrimitives.WriteInt32BigEndian(entry[4..], type);
+                BinaryPrimitives.WriteInt32BigEndian(entry[8..], offset);
+                BinaryPrimitives.WriteInt32BigEndian(entry[12..], count);
+                output.Write(entry);
+            }
+
+            internal readonly record struct Entry(int Type, int Count, byte[] Data);
+        }
+        CS
