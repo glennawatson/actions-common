@@ -27,37 +27,11 @@ jobs:
         with:
           stamp-version: 'false'
 
-      - name: Log in to GHCR
-        env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-
-      - name: Build and push image
-        shell: bash
-        run: |
-          cd "$RUNNER_TEMP" && dotnet run - <<'CS'
-          using System.Diagnostics;
-          using static System.Environment;
-
-          var image = GetEnvironmentVariable("IMAGE")!;
-          string[] references = [$"{image}:latest", $"{image}:{DateTime.UtcNow:yyyyMMdd}-{GetEnvironmentVariable("GITHUB_SHA")![..7]}"];
-
-          Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE")!);
-
-          if (Process.Run("docker", ["build", .. references.SelectMany(reference => (string[])["-t", reference]), "docker/certum-signer"]) is { ExitCode: not 0 } build)
-          {
-              return build.ExitCode;
-          }
-
-          foreach (var reference in references)
-          {
-              if (Process.Run("docker", ["push", reference]) is { ExitCode: not 0 } push)
-              {
-                  return push.ExitCode;
-              }
-          }
-
-          Console.WriteLine($"Pushed {string.Join(" and ", references)}");
-          return 0;
-          CS
+      - name: Log in to GHCR, build and push image
+        uses: reactiveui/actions-common/.github/actions/container-image-publish@main
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          image: ${{ env.IMAGE }}
+          context: docker/certum-signer

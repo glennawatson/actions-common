@@ -1,0 +1,34 @@
+name: Container image publish
+description: Log in to a registry, then build a Docker image and push it tagged latest and yyyyMMdd-<short sha>.
+
+inputs:
+  registry:
+    description: 'Registry host to log in to.'
+    required: false
+    default: 'ghcr.io'
+  username:
+    description: 'Registry user name.'
+    required: true
+  token:
+    description: 'Registry token or password.'
+    required: true
+  image:
+    description: 'Image name without a tag, such as ghcr.io/owner/name.'
+    required: true
+  context:
+    description: 'Docker build context folder, relative to the workspace.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build and push image
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REGISTRY_USER: ${{ inputs.username }}
+        REGISTRY_TOKEN: ${{ inputs.token }}
+        IMAGE: ${{ inputs.image }}
+        CONTEXT: ${{ inputs.context }}
+      working-directory: ${{ runner.temp }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/container-image-publish.cs" -- "$REGISTRY" "$REGISTRY_USER" "$IMAGE" "$CONTEXT"
