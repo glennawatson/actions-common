@@ -1,5 +1,8 @@
 #!/usr/bin/env dotnet
-#:package System.Management@*
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
+#:package System.Management
 #:property PublishAot=false
 
 using System.Management;
@@ -20,6 +23,7 @@ AddExclusions(
         GetEnvironmentVariable("RUNNER_TEMP")!,
         Path.Combine(GetFolderPath(SpecialFolder.UserProfile), ".nuget"),
     ]);
+
 AddExclusions("ExclusionProcess", ["dotnet.exe", "MSBuild.exe", "VBCSCompiler.exe"]);
 
 [SupportedOSPlatform("windows")]
@@ -30,7 +34,7 @@ static void AddExclusions(string preference, string[] values)
         using var preferences = new ManagementClass(@"root\Microsoft\Windows\Defender", "MSFT_MpPreference", null);
         using var parameters = preferences.GetMethodParameters("Add");
         parameters[preference] = values;
-        preferences.InvokeMethod("Add", parameters, null);
+        _ = preferences.InvokeMethod("Add", parameters, null);
         Console.WriteLine($"Defender {preference}: {string.Join(", ", values)}");
     }
     catch (Exception ex)

@@ -1,15 +1,24 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using static System.Environment;
-args = [System.Environment.GetEnvironmentVariable("BUMP_TAG") ?? string.Empty, System.Environment.GetEnvironmentVariable("BUMP_PRERELEASE") ?? string.Empty, System.Environment.GetEnvironmentVariable("VERSION_OVERRIDE") ?? string.Empty];
+const int InvalidArgumentsExitCode = 2;
+
+args = [
+    System.Environment.GetEnvironmentVariable("BUMP_TAG") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("BUMP_PRERELEASE") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("VERSION_OVERRIDE") ?? string.Empty];
 
 if (args is not [var bumpTag, var bumpPrerelease, var versionOverride])
 {
     Console.WriteLine("::error::Expected the bump tag, bump pre-release and version override arguments.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 var outputs = GetEnvironmentVariable("GITHUB_OUTPUT")!;
+
 if (versionOverride is "")
 {
     File.AppendAllLines(outputs, [$"tag={bumpTag}", $"prerelease={(bumpPrerelease is "" ? "false" : bumpPrerelease)}"]);
@@ -17,7 +26,9 @@ if (versionOverride is "")
 }
 
 var tag = $"v{versionOverride}";
+
 Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE")!);
+
 if (Process.Run("git", ["rev-parse", "-q", "--verify", $"refs/tags/{tag}"], silent: true) is { ExitCode: 0 })
 {
     Console.WriteLine($"::error::Tag {tag} already exists. Refusing to re-release an existing version.");
@@ -25,4 +36,5 @@ if (Process.Run("git", ["rev-parse", "-q", "--verify", $"refs/tags/{tag}"], sile
 }
 
 File.AppendAllLines(outputs, [$"tag={tag}", $"prerelease={(versionOverride.Contains('-') ? "true" : "false")}"]);
+
 return 0;

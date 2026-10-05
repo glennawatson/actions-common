@@ -1,12 +1,17 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using static System.Environment;
+const int InvalidArgumentsExitCode = 2;
+
 args = [System.Environment.GetEnvironmentVariable("SUITE") ?? string.Empty, System.Environment.GetEnvironmentVariable("FILTER") ?? string.Empty];
 
 if (args is not [var suite, var filter])
 {
     Console.WriteLine("::error::Expected the suite and filter arguments.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 string[] projects = suite switch
@@ -21,12 +26,13 @@ string[] projects = suite switch
 if (projects is [])
 {
     Console.WriteLine($"::error::Unknown benchmark suite '{suite}'.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 var workspace = GetEnvironmentVariable("GITHUB_WORKSPACE")!;
 
 RaisePriority();
+
 Directory.SetCurrentDirectory(Path.Combine(workspace, "bench", "src"));
 
 foreach (var project in projects)
@@ -43,11 +49,13 @@ foreach (var project in projects)
         ]);
 
     Console.WriteLine("::endgroup::");
-    if (status is { ExitCode: not 0 })
+    if (status is not { ExitCode: not 0 })
     {
-        Console.WriteLine($"::error::{name} exited with {status.ExitCode}");
-        return status.ExitCode;
+        continue;
     }
+
+    Console.WriteLine($"::error::{name} exited with {status.ExitCode}");
+    return status.ExitCode;
 }
 
 return 0;

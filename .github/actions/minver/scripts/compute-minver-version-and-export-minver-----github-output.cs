@@ -1,17 +1,29 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using static System.Environment;
-args = [System.Environment.GetEnvironmentVariable("TAG_PREFIX") ?? string.Empty, System.Environment.GetEnvironmentVariable("MINIMUM_MAJOR_MINOR") ?? string.Empty, System.Environment.GetEnvironmentVariable("DEFAULT_PRE_RELEASE") ?? string.Empty, System.Environment.GetEnvironmentVariable("AUTO_INCREMENT") ?? string.Empty, System.Environment.GetEnvironmentVariable("VERBOSITY") ?? string.Empty, System.Environment.GetEnvironmentVariable("VERSION_OVERRIDE") ?? string.Empty];
+const int InvalidArgumentsExitCode = 2;
+
+args = [
+    System.Environment.GetEnvironmentVariable("TAG_PREFIX") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("MINIMUM_MAJOR_MINOR") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("DEFAULT_PRE_RELEASE") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("AUTO_INCREMENT") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("VERBOSITY") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("VERSION_OVERRIDE") ?? string.Empty];
 
 if (args is not [var tagPrefix, var minimumMajorMinor, var defaultPreRelease, var autoIncrement, var verbosity, var versionOverride])
 {
     Console.WriteLine("::error::Expected the tag prefix, minimum major.minor, pre-release identifiers, auto-increment, verbosity and version override arguments.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE")!);
 
 string semVer2;
+
 if (versionOverride is not "")
 {
     semVer2 = versionOverride;
@@ -41,6 +53,7 @@ else
 
 // SemVer2 is "<major>.<minor>.<patch>[-<pre>][+<meta>]".
 var core = semVer2.Split('-', '+')[0];
+
 var preRelease = semVer2[core.Length..] is ['-', .. var rest] ? rest.Split('+')[0] : string.Empty;
 
 var height = Process.RunAndCaptureText("git", ["describe", "--tags", "--abbrev=0", "--match", $"{tagPrefix}[0-9]*"]) switch
@@ -61,8 +74,23 @@ var height = Process.RunAndCaptureText("git", ["describe", "--tags", "--abbrev=0
 ];
 
 // MinVer's MSBuild task stamps MINVERVERSIONOVERRIDE verbatim instead of walking git per project.
-File.AppendAllLines(GetEnvironmentVariable("GITHUB_ENV")!, [.. values.Select(value => $"MINVER_{value.Name}={value.Value}"), $"MINVERVERSIONOVERRIDE={semVer2}"]);
-File.AppendAllLines(GetEnvironmentVariable("GITHUB_OUTPUT")!, values.Select(value => $"{value.Name}={value.Value}"));
+var environmentLines = new string[values.Length + 1];
+
+var outputLines = new string[values.Length];
+
+for (var index = 0; index < values.Length; index++)
+{
+    var value = values[index];
+    environmentLines[index] = $"MINVER_{value.Name}={value.Value}";
+    outputLines[index] = $"{value.Name}={value.Value}";
+}
+
+environmentLines[^1] = $"MINVERVERSIONOVERRIDE={semVer2}";
+
+File.AppendAllLines(GetEnvironmentVariable("GITHUB_ENV")!, environmentLines);
+
+File.AppendAllLines(GetEnvironmentVariable("GITHUB_OUTPUT")!, outputLines);
+
 return 0;
 
 static string[] Option(string name, string value) => value is "" ? [] : [name, value];

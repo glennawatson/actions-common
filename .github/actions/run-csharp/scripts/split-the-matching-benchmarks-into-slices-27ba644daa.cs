@@ -1,21 +1,29 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using static System.Environment;
-args = [System.Environment.GetEnvironmentVariable("SUITE") ?? string.Empty, System.Environment.GetEnvironmentVariable("FILTER") ?? string.Empty, System.Environment.GetEnvironmentVariable("BENCHMARKS_PER_SLICE") ?? string.Empty];
+const int InvalidArgumentsExitCode = 2;
+
+args = [
+    System.Environment.GetEnvironmentVariable("SUITE") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("FILTER") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("BENCHMARKS_PER_SLICE") ?? string.Empty];
 
 if (args is not [var suite, var filter, var perSlice])
 {
     Console.WriteLine("::error::Expected the suite, filter and benchmarks-per-slice arguments.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 if (!int.TryParse(perSlice, NumberStyles.Integer, CultureInfo.InvariantCulture, out var benchmarksPerSlice) || benchmarksPerSlice < 1)
 {
     Console.WriteLine($"::error::benchmarksPerSlice must be a whole number above zero, got '{perSlice}'.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 string[] filters = ["--filter", .. filter.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
@@ -32,13 +40,17 @@ string[] projects = suite switch
 if (projects is [])
 {
     Console.WriteLine($"::error::Unknown benchmark suite '{suite}'.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 var workspace = GetEnvironmentVariable("GITHUB_WORKSPACE")!;
+
 var total = 0;
+
 using var buffer = new MemoryStream();
+
 using var summaryBuffer = new MemoryStream();
+
 using (var writer = new Utf8JsonWriter(buffer))
 using (var summaryWriter = new Utf8JsonWriter(summaryBuffer))
 {
@@ -71,7 +83,7 @@ using (var summaryWriter = new Utf8JsonWriter(summaryBuffer))
             {
                 if (line.Contains('.') && !line.Contains(' '))
                 {
-                    benchmarks.Add(line);
+                    _ = benchmarks.Add(line);
                 }
             }
         }
@@ -79,16 +91,32 @@ using (var summaryWriter = new Utf8JsonWriter(summaryBuffer))
         // Whole classes per slice.
         List<List<string>> slices = [];
         List<string> current = [];
-        foreach (var type in benchmarks.GroupBy(static name => name[..name.LastIndexOf('.')]))
         {
-            var methods = type.ToArray();
-            if (current.Count > 0 && current.Count + methods.Length > benchmarksPerSlice)
+            var types = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            List<List<string>> groups = [];
+            foreach (var benchmark in benchmarks)
             {
-                slices.Add(current);
-                current = [];
+                var name = benchmark[..benchmark.LastIndexOf('.')];
+                if (!types.TryGetValue(name, out var methods))
+                {
+                    methods = [];
+                    types.Add(name, methods);
+                    groups.Add(methods);
+                }
+
+                methods.Add(benchmark);
             }
 
-            current.AddRange(methods);
+            foreach (var methods in groups)
+            {
+                if (current.Count > 0 && current.Count + methods.Count > benchmarksPerSlice)
+                {
+                    slices.Add(current);
+                    current = [];
+                }
+
+                current.AddRange(methods);
+            }
         }
 
         if (current.Count > 0)
@@ -103,13 +131,13 @@ using (var summaryWriter = new Utf8JsonWriter(summaryBuffer))
             writer.WriteStartObject();
             writer.WriteString("project", project);
             writer.WriteString("slice", name);
-            writer.WriteString("benchmarks", string.Join('\n', slices[i]));
+            writer.WriteString(nameof(benchmarks), string.Join('\n', slices[i]));
             writer.WriteEndObject();
 
             summaryWriter.WriteStartObject();
             summaryWriter.WriteString("project", project);
             summaryWriter.WriteString("slice", name);
-            summaryWriter.WriteNumber("benchmarks", slices[i].Count);
+            summaryWriter.WriteNumber(nameof(benchmarks), slices[i].Count);
             summaryWriter.WriteEndObject();
         }
 
@@ -135,4 +163,5 @@ File.AppendAllLines(
         $"slices={Encoding.UTF8.GetString(buffer.ToArray())}",
         $"sliceSummary={Encoding.UTF8.GetString(summaryBuffer.ToArray())}",
     ]);
+
 return 0;

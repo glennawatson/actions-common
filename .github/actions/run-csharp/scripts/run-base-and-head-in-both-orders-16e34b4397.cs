@@ -1,17 +1,28 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using static System.Environment;
-args = [System.Environment.GetEnvironmentVariable("PROJECT") ?? string.Empty, System.Environment.GetEnvironmentVariable("SLICE") ?? string.Empty, System.Environment.GetEnvironmentVariable("RUNNER_TEMP/benchmark-ab") ?? string.Empty, System.Environment.GetEnvironmentVariable("WARMUP_COUNT") ?? string.Empty, System.Environment.GetEnvironmentVariable("ITERATION_COUNT") ?? string.Empty];
+const int InvalidArgumentsExitCode = 2;
+
+args = [
+    System.Environment.GetEnvironmentVariable("PROJECT") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("SLICE") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("RUNNER_TEMP/benchmark-ab") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("WARMUP_COUNT") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("ITERATION_COUNT") ?? string.Empty];
 
 if (args is not [var project, var slice, var results, var warmupCount, var iterationCount])
 {
     Console.WriteLine("::error::Expected the project, slice, results folder, warmup count and iteration count arguments.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 string[] iterations = ["--warmupCount", warmupCount, "--iterationCount", iterationCount, "--launchCount", "1"];
 
 string[] filters = ["--filter", .. GetEnvironmentVariable("BENCHMARKS")!.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
 var workspace = GetEnvironmentVariable("GITHUB_WORKSPACE")!;
 
 RaisePriority();
@@ -22,11 +33,13 @@ foreach (var side in (string[])["base", "head"])
     Console.WriteLine($"::group::Build {side}");
     var build = Process.Run("dotnet", ["build", Path.Combine(workspace, "ab", side, "src", project), "-c", "Release"]);
     Console.WriteLine("::endgroup::");
-    if (build is { ExitCode: not 0 })
+    if (build is not { ExitCode: not 0 })
     {
-        Console.WriteLine($"::error::Building {side} {project} exited with {build.ExitCode}");
-        return build.ExitCode;
+        continue;
     }
+
+    Console.WriteLine($"::error::Building {side} {project} exited with {build.ExitCode}");
+    return build.ExitCode;
 }
 
 foreach (var run in (string[][])[["r1", "base"], ["r1", "head"], ["r2", "head"], ["r2", "base"]])
@@ -45,11 +58,13 @@ foreach (var run in (string[][])[["r1", "base"], ["r1", "head"], ["r2", "head"],
         ]);
 
     Console.WriteLine("::endgroup::");
-    if (status is { ExitCode: not 0 })
+    if (status is not { ExitCode: not 0 })
     {
-        Console.WriteLine($"::error::{order} {side} {slice} exited with {status.ExitCode}");
-        return status.ExitCode;
+        continue;
     }
+
+    Console.WriteLine($"::error::{order} {side} {slice} exited with {status.ExitCode}");
+    return status.ExitCode;
 }
 
 return 0;

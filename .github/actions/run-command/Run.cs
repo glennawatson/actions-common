@@ -1,13 +1,23 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using System.Text;
 using static System.Environment;
 
 Directory.SetCurrentDirectory(Path.GetFullPath(GetEnvironmentVariable("COMMAND_DIRECTORY")!, GetEnvironmentVariable("GITHUB_WORKSPACE")!));
+
 var command = Expand(GetEnvironmentVariable("COMMAND_FILE")!);
+
 var arguments = (GetEnvironmentVariable("COMMAND_ARGUMENTS") ?? string.Empty)
-    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-    .Select(Expand).ToArray();
+    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+
+for (var index = 0; index < arguments.Length; index++)
+{
+    arguments[index] = Expand(arguments[index]);
+}
+
 return Process.Run(command, arguments).ExitCode;
 
 static string Expand(string value)
@@ -17,27 +27,40 @@ static string Expand(string value)
     {
         if (value[index] != '$')
         {
-            result.Append(value[index]);
+            _ = result.Append(value[index]);
             continue;
         }
 
         var start = index + 1;
-        var braced = start < value.Length && value[start] == '{';
-        if (braced) start++;
-        var end = start;
-        while (end < value.Length && (char.IsAsciiLetterOrDigit(value[end]) || value[end] == '_')) end++;
-        if (end == start || (braced && (end >= value.Length || value[end] != '}')))
+        var braced = IsBracedVariable(value, start);
+        if (braced)
         {
-            result.Append('$');
+            start++;
+        }
+
+        var end = start;
+        while (end < value.Length && IsVariableCharacter(value[end]))
+        {
+            end++;
+        }
+
+        if (end == start || !HasClosingBrace(value, braced, end))
+        {
+            _ = result.Append('$');
             continue;
         }
 
         var name = value[start..end];
-        var replacement = GetEnvironmentVariable(name);
-        if (replacement is null) throw new InvalidOperationException($"Missing environment variable: {name}.");
-        result.Append(replacement);
+        var replacement = GetEnvironmentVariable(name) ?? throw new InvalidOperationException($"Missing environment variable: {name}.");
+        _ = result.Append(replacement);
         index = braced ? end : end - 1;
     }
 
     return result.ToString();
 }
+
+static bool HasClosingBrace(string value, bool braced, int end) => !braced || (end < value.Length && value[end] == '}');
+
+static bool IsVariableCharacter(char value) => char.IsAsciiLetterOrDigit(value) || value == '_';
+
+static bool IsBracedVariable(string value, int start) => start < value.Length && value[start] == '{';

@@ -1,21 +1,29 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using static System.Environment;
+const int InvalidArgumentsExitCode = 2;
+
 args = [System.Environment.GetEnvironmentVariable("FILTER") ?? string.Empty];
 
 if (args is not [var filter])
 {
     Console.WriteLine("::error::Expected the filter argument.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 const string Project = "benchmarks/ClaudeNim.Aot.Benchmarks";
+
 var workspace = GetEnvironmentVariable("GITHUB_WORKSPACE")!;
 
 RaisePriority();
+
 Directory.SetCurrentDirectory(Path.Combine(workspace, "bench", "src"));
 
 var name = Path.GetFileName(Project);
+
 Console.WriteLine($"::group::{name}");
 
 var status = Process.Run(
@@ -27,6 +35,7 @@ var status = Process.Run(
     ]);
 
 Console.WriteLine("::endgroup::");
+
 return status.ExitCode;
 
 // The runner is a shared virtual machine: the raised priority removes the noise that is ours to remove, and the

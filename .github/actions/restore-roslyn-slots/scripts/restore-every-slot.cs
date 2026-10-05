@@ -1,19 +1,30 @@
 #!/usr/bin/env dotnet
+// Copyright (c) 2026 Glenn Watson. All rights reserved.
+// Glenn Watson licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
 using static System.Environment;
-args = [System.Environment.GetEnvironmentVariable("SRC_FOLDER") ?? string.Empty, System.Environment.GetEnvironmentVariable("PROJECTS") ?? string.Empty, System.Environment.GetEnvironmentVariable("SLOTS") ?? string.Empty];
+const int InvalidArgumentsExitCode = 2;
+
+args = [
+    System.Environment.GetEnvironmentVariable("SRC_FOLDER") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("PROJECTS") ?? string.Empty,
+    System.Environment.GetEnvironmentVariable("SLOTS") ?? string.Empty];
 
 if (args is not [var srcFolder, var projectList, var slotList])
 {
     Console.WriteLine("::error::Expected the source folder, projects and slots arguments.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
-string[] projects = Split(projectList), slots = Split(slotList);
+var projects = Split(projectList);
+
+var slots = Split(slotList);
+
 if (projects is [] || slots is [])
 {
     Console.WriteLine("::error::Both 'projects' and 'slots' must name at least one entry.");
-    return 2;
+    return InvalidArgumentsExitCode;
 }
 
 Directory.SetCurrentDirectory(Path.Combine(GetEnvironmentVariable("GITHUB_WORKSPACE")!, srcFolder));
@@ -26,11 +37,13 @@ foreach (var slot in slots)
         var restore = Process.Run("dotnet", ["restore", project, $"-p:RoslynVersion={slot}"]);
         Console.WriteLine("::endgroup::");
 
-        if (restore is { ExitCode: not 0 })
+        if (restore is not { ExitCode: not 0 })
         {
-            Console.WriteLine($"::error::Restoring {project} for {slot} exited with {restore.ExitCode}");
-            return restore.ExitCode;
+            continue;
         }
+
+        Console.WriteLine($"::error::Restoring {project} for {slot} exited with {restore.ExitCode}");
+        return restore.ExitCode;
     }
 }
 
