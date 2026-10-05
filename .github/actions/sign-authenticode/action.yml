@@ -1,0 +1,30 @@
+name: Sign and verify Authenticode
+description: Sign Windows payloads and installers through the connected SimplySign session.
+inputs:
+  tools-assembly:
+    description: Published tools assembly with the sign authenticode command.
+    required: true
+  packages-glob:
+    description: Release assets to process.
+    required: true
+  timestamp-url:
+    description: RFC3161 timestamp authority.
+    default: 'http://time.certum.pl'
+    required: false
+outputs:
+  certificate-source:
+    description: Verified signed executable containing the public signing certificate.
+    value: ${{ steps.sign.outputs.certificate-source }}
+runs:
+  using: composite
+  steps:
+  - name: Sign and verify Windows artifacts
+    id: sign
+    env:
+      SIGNING_APP: ${{ inputs.tools-assembly }}
+      SIGNING_KIND: authenticode
+      PKG_GLOB: ${{ inputs.packages-glob }}
+      TS_URL: ${{ inputs.timestamp-url }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/../certum-sign/scripts/run-signing-app.cs

@@ -38,21 +38,10 @@ inputs:
 runs:
   using: composite
   steps:
-  - name: Resolve prebuilt SimplySign paths
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+  - name: Connect SimplySign
+    uses: glennawatson/actions-common/.github/actions/certum-connect@main
     with:
-      script-file: ${{ github.action_path }}/scripts/resolve-prebuilt-simplysign-paths.cs
-  - name: Start headless display
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
-    with:
-      script-file: ${{ github.action_path }}/scripts/start-headless-display.cs
-  - name: Connect SimplySign (headless login)
-    env:
-      DISPLAY: ':99'
-      LAUNCH_SECONDS: ${{ inputs.launch-seconds }}
-    uses: glennawatson/actions-common/.github/actions/run-csharp@main
-    with:
-      script-file: ${{ github.action_path }}/scripts/connect-simplysign--headless-login.cs
+      launch-seconds: ${{ inputs.launch-seconds }}
   - name: Sign packages with jsign + verify
     if: inputs.signing-script == ''
     env:

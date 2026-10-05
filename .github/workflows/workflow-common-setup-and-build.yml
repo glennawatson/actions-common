@@ -49,6 +49,14 @@ on:
         description: C# file to run with the test argument before building.
         type: string
         default: ''
+      testPreparationProject:
+        description: Project to publish and invoke before building; its assembly name must match the project filename.
+        type: string
+        default: ''
+      testPreparationArguments:
+        description: JSON array of arguments for the preparation project.
+        type: string
+        default: '["test"]'
 permissions:
   contents: read
 jobs:
@@ -81,6 +89,15 @@ jobs:
       with:
         script-file: ${{ inputs.testPreparationFile }}
         arguments: test
+    - name: Prepare tests with application
+      if: inputs.testPreparationProject != ''
+      env:
+        PREPARATION_PROJECT: ${{ inputs.testPreparationProject }}
+        PREPARATION_ARGUMENTS: ${{ inputs.testPreparationArguments }}
+        PREPARATION_CONFIGURATION: ${{ inputs.configuration }}
+      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      with:
+        shared-script: prepare-tests-project.cs
     - name: Build
       uses: glennawatson/actions-common/.github/actions/dotnet-build@main
       with:

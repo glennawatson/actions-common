@@ -1,0 +1,24 @@
+name: Sign and verify detached CMS
+description: Sign release archives through the connected SimplySign session using .NET CMS APIs.
+inputs:
+  tools-assembly:
+    description: Published tools assembly with the sign detached command.
+    required: true
+  packages-glob:
+    description: Release assets to process.
+    required: true
+  certificate-source:
+    description: Verified signed executable containing the public signing certificate.
+    required: true
+runs:
+  using: composite
+  steps:
+  - name: Sign and verify archive signatures
+    env:
+      SIGNING_APP: ${{ inputs.tools-assembly }}
+      SIGNING_KIND: detached
+      CERTIFICATE_SOURCE: ${{ inputs.certificate-source }}
+      PKG_GLOB: ${{ inputs.packages-glob }}
+    uses: glennawatson/actions-common/.github/actions/run-csharp@main
+    with:
+      script-file: ${{ github.action_path }}/../certum-sign/scripts/run-signing-app.cs
