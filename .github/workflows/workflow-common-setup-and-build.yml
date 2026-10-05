@@ -91,9 +91,7 @@ jobs:
       if: runner.os == 'Linux' && inputs.linuxPackages != ''
       env:
         LINUX_PACKAGES: ${{ inputs.linuxPackages }}
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
+      run: sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
     - name: Prepare tests
       if: inputs.testPreparationFile != ''
       uses: glennawatson/actions-common/.github/actions/run-csharp@main
