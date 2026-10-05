@@ -1,19 +1,5 @@
-name: Certum SimplySign jsign signing (prebuilt image)
-description: |
-  Sign files with jsign and a Certum "Code Signing in the Cloud" certificate: NuGet packages (then checked with
-  `dotnet nuget verify`) or Windows executables and installers (target-type authenticode).
-
-  The token is connected by certum-connect, which runs the SimplySign Desktop GUI headlessly and logs in; jsign then
-  signs each file over PKCS#11.
-
-  MUST run inside the prebuilt certum-signer image (ghcr.io/reactiveui/certum-signer),
-  which bakes in SimplySign Desktop, jsign, the .NET 10 and 11 SDKs, and the
-  X11/PKCS#11 dependencies and exports $SS_DIST / $JSIGN_JAR. Credentials are read
-  from the environment — composite actions cannot declare secret-typed inputs — so
-  map these secrets into env on the calling job (standard secrets.* syntax):
-    CERTUM_USER_ID            SimplySign login id
-    CERTUM_OTP_URI            otpauth:// URI for the SimplySign TOTP
-    CERTUM_CERT_FINGERPRINT   (optional) SHA-256 fingerprint to assert against
+name: Certum jsign signing
+description: Sign files with jsign and the Certum token. Run in the certum-signer image with CERTUM_USER_ID and CERTUM_OTP_URI set.
 
 inputs:
   packages-glob:

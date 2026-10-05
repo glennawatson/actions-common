@@ -1,16 +1,5 @@
-name: Certum SimplySign RPM file signing (prebuilt image)
-description: |
-  Add IMA file signatures to .rpm packages with a Certum "Code Signing in the Cloud" certificate.
-
-  Each regular file's SHA-256 digest, already recorded in the RPM header, is signed by the SimplySign token through
-  PKCS#11 and stored as RPMTAG_FILESIGNATURES, the same IMA signatures `rpmsign --signfiles` writes. The header
-  digests are then recomputed, so `rpm -K` still verifies the package. rpm-plugin-ima writes the signatures to each
-  installed file's security.ima attribute for the kernel's IMA to appraise against the certificate.
-
-  MUST run inside the prebuilt certum-signer image (ghcr.io/reactiveui/certum-signer). Map these secrets into env on
-  the calling job:
-    CERTUM_USER_ID            SimplySign login id
-    CERTUM_OTP_URI            otpauth:// URI for the SimplySign TOTP
+name: Certum RPM signing
+description: Add IMA file signatures to RPMs with the Certum token. Run in the certum-signer image with CERTUM_USER_ID and CERTUM_OTP_URI set.
 
 inputs:
   packages-glob:

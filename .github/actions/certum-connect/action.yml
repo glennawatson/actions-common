@@ -1,14 +1,5 @@
-name: Certum SimplySign connect (prebuilt image)
-description: |
-  Connect the Certum "Code Signing in the Cloud" token. SimplySign has no headless signing API: the cloud key is
-  reachable only through the SimplySign Desktop GUI, which exposes it as a PKCS#11 token. This action runs that GUI
-  headlessly (Xvfb + xdotool), logs in with the TOTP derived from the otpauth URI, and exports $SS_PKCS11 for the
-  signing step that follows.
-
-  MUST run inside the prebuilt certum-signer image (ghcr.io/reactiveui/certum-signer), which exports $SS_DIST.
-  Map these secrets into env on the calling job:
-    CERTUM_USER_ID            SimplySign login id
-    CERTUM_OTP_URI            otpauth:// URI for the SimplySign TOTP
+name: Certum connect
+description: Log in to the Certum token and export $SS_PKCS11. Run in the certum-signer image with CERTUM_USER_ID and CERTUM_OTP_URI set.
 
 inputs:
   launch-seconds:
