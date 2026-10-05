@@ -13,10 +13,39 @@ inputs:
     description: Newline-separated arguments.
     required: false
     default: ''
+outputs:
+  sha:
+    description: Source commit SHA written by the script.
+    value: ${{ steps.run.outputs.sha }}
+  version:
+    description: Computed release version written by the script.
+    value: ${{ steps.run.outputs.version }}
+  tag:
+    description: Release tag written by the script.
+    value: ${{ steps.run.outputs.tag }}
+  prerelease:
+    description: Whether the release is a prerelease.
+    value: ${{ steps.run.outputs.prerelease }}
+  SemVer2:
+    description: Full MinVer semantic version.
+    value: ${{ steps.run.outputs.SemVer2 }}
+  SimpleVersion:
+    description: MinVer major.minor.patch version.
+    value: ${{ steps.run.outputs.SimpleVersion }}
+  NuGetPackageVersion:
+    description: MinVer version without build metadata.
+    value: ${{ steps.run.outputs.NuGetPackageVersion }}
+  GitCommitId:
+    description: MinVer source commit SHA.
+    value: ${{ steps.run.outputs.GitCommitId }}
+  VersionHeight:
+    description: MinVer commits since the version tag.
+    value: ${{ steps.run.outputs.VersionHeight }}
 runs:
   using: composite
   steps:
   - name: Run C#
+    id: run
     shell: dotnet run --file {0}
     working-directory: ${{ runner.temp }}
     env:

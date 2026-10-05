@@ -1,5 +1,7 @@
 #!/usr/bin/env dotnet
+#:package YamlDotNet@18.1.0
 using System.Diagnostics;
+using YamlDotNet.RepresentationModel;
 
 var root = Environment.GetEnvironmentVariable("GITHUB_WORKSPACE") ?? Directory.GetCurrentDirectory();
 var action = Path.Combine(root, ".github", "actions", "run-csharp");
@@ -36,7 +38,35 @@ try
         ["GITHUB_OUTPUT"] = output,
     });
     Check(shared.ExitStatus.ExitCode == 0 && File.ReadAllText(output).StartsWith("sha=", StringComparison.Ordinal), "Resolve a shared script from the action folder");
-    Console.WriteLine("4 runner checks passed.");
+
+    var yaml = new YamlStream();
+    using var actionReader = File.OpenText(Path.Combine(action, "action.yml"));
+    yaml.Load(actionReader);
+    var contract = (YamlMappingNode)yaml.Documents[0].RootNode;
+    var outputs = contract.Children.TryGetValue(new YamlScalarNode("outputs"), out var declared) ? (YamlMappingNode)declared : new YamlMappingNode();
+    string[] names = ["sha", "version", "tag", "prerelease", "SemVer2", "SimpleVersion", "NuGetPackageVersion", "GitCommitId", "VersionHeight"];
+    var steps = (YamlSequenceNode)((YamlMappingNode)contract.Children[new YamlScalarNode("runs")]).Children[new YamlScalarNode("steps")];
+    Check(steps.Children.OfType<YamlMappingNode>().Any(step => step.Children.TryGetValue(new YamlScalarNode("id"), out var id) && id.ToString() == "run")
+        && names.All(name => outputs.Children.TryGetValue(new YamlScalarNode(name), out var value)
+            && ((YamlMappingNode)value).Children[new YamlScalarNode("value")].ToString() == $"${{{{ steps.run.outputs.{name} }}}}"),
+        "Expose script outputs through the composite action");
+    foreach (var version in new[] { "2.3.4", "2.3.4-rc.2+build.7" })
+    {
+        var versionOutput = Path.Combine(scratch, version + ".output");
+        var result = Run(new()
+        {
+            ["SCRIPT_FILE"] = Path.Combine(root, ".github/actions/minver/scripts/compute-minver-version-and-export-minver-----github-output.cs"),
+            ["VERSION_OVERRIDE"] = version,
+            ["GITHUB_ENV"] = envFile,
+            ["GITHUB_OUTPUT"] = versionOutput,
+        });
+        var values = File.ReadAllLines(versionOutput).ToDictionary(line => line[..line.IndexOf('=')], line => line[(line.IndexOf('=') + 1)..]);
+        Check(result.ExitStatus.ExitCode == 0 && values["SemVer2"] == version && values["SimpleVersion"] == "2.3.4"
+            && values["NuGetPackageVersion"] == version.Split('+')[0] && values.ContainsKey("GitCommitId") && values.ContainsKey("VersionHeight"),
+            "Preserve MinVer output values for " + version);
+    }
+
+    Console.WriteLine("7 runner checks passed.");
     return 0;
 
     ProcessTextOutput Run(Dictionary<string, string> variables)
