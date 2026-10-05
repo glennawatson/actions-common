@@ -184,8 +184,8 @@ internal static partial class Program
     /// <summary>The zlib level used for chunks.</summary>
     private const int BestCompression = 9;
 
-    /// <summary>A chunk of zeros, stored without data.</summary>
-    private const uint ZeroChunk = 2;
+    /// <summary>A zero-fill chunk, stored without data. hdiutil skips ignore chunks (type 2) in the blkx checksum, so zeros use this type.</summary>
+    private const uint ZeroChunk = 0;
 
     /// <summary>A chunk stored as is.</summary>
     private const uint RawChunk = 1;
@@ -791,7 +791,7 @@ internal static partial class Program
         WriteUInt16BigEndian(node[(NodeSize - (OffsetLength * (records.Count + 1)))..], (ushort)offset);
     }
 
-    /// <summary>Writes the data fork: each chunk zlib compressed when that is smaller, stored raw otherwise, and left out when all zero.</summary>
+    /// <summary>Writes the data fork: each chunk zlib compressed when that is smaller, stored raw otherwise, and recorded as zero fill when all zero.</summary>
     /// <param name="handle">The .dmg.</param>
     /// <param name="image">The volume image.</param>
     /// <param name="mish">Receives the chunk table.</param>

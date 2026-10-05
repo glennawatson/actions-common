@@ -27,6 +27,7 @@ runs:
       run: hdiutil verify "$DMG_PACKAGE"
 
     - name: Mount the image
+      id: attach
       shell: bash
       env:
         DMG_PACKAGE: ${{ inputs.package }}
@@ -56,6 +57,6 @@ runs:
       run: bash -euo pipefail -c "$DMG_SMOKE"
 
     - name: Detach the image
-      if: always()
+      if: always() && steps.attach.outcome == 'success'
       shell: bash
       run: hdiutil detach "$RUNNER_TEMP/dmg-verify"

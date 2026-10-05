@@ -474,8 +474,14 @@ internal static partial class Program
     /// <param name="arguments">The arguments.</param>
     /// <returns>The output.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Task<ProcessTextOutput> CaptureAsync(CancellationToken cancellationToken, params string[] arguments) =>
-        Process.RunAndCaptureTextAsync(OnDisplay(XDoTool, arguments), cancellationToken);
+    private static Task<ProcessTextOutput> CaptureAsync(CancellationToken cancellationToken, params string[] arguments)
+    {
+        // RunAndCaptureTextAsync with a ProcessStartInfo throws unless both streams are redirected.
+        var start = OnDisplay(XDoTool, arguments);
+        start.RedirectStandardOutput = true;
+        start.RedirectStandardError = true;
+        return Process.RunAndCaptureTextAsync(start, cancellationToken);
+    }
 
     /// <summary>Makes the start info for a program on the headless display.</summary>
     /// <param name="fileName">The program.</param>
