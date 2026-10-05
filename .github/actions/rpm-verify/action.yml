@@ -1,0 +1,60 @@
+name: RPM verify
+description: Install an .rpm with dnf, verify its files, check expected paths and a smoke command, then remove it; run the job in a Fedora container.
+
+# The calling job must run inside an image with dnf, for example `container: fedora:latest`.
+# A composite action cannot pick the job container, so every step here runs in the caller's container as root.
+
+inputs:
+  package:
+    description: 'The .rpm to verify.'
+    required: true
+  name:
+    description: 'Package name.'
+    required: true
+  expect-files:
+    description: 'Installed paths that must exist, one per line; paths must not contain spaces.'
+    required: false
+    default: ''
+  smoke-command:
+    description: 'Bash command to run while installed; must not need a display, so use a CLI flag such as --version.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install the package
+      shell: bash
+      env:
+        RPM_PACKAGE: ${{ inputs.package }}
+      # Fedora images set tsflags=nodocs; clearing it stops rpm -V reporting missing docs.
+      run: dnf install -y --setopt=tsflags= "$RPM_PACKAGE"
+
+    - name: Verify the installed files
+      shell: bash
+      env:
+        RPM_NAME: ${{ inputs.name }}
+      run: |
+        rpm -ql "$RPM_NAME"
+        rpm -V "$RPM_NAME"
+
+    - name: Check the expected paths
+      if: inputs.expect-files != ''
+      shell: bash
+      env:
+        RPM_EXPECT_FILES: ${{ inputs.expect-files }}
+      # Left unquoted so each line becomes its own path.
+      run: ls -d $RPM_EXPECT_FILES
+
+    - name: Run the smoke command
+      if: inputs.smoke-command != ''
+      shell: bash
+      env:
+        RPM_SMOKE: ${{ inputs.smoke-command }}
+      run: bash -euo pipefail -c "$RPM_SMOKE"
+
+    - name: Remove the package
+      shell: bash
+      env:
+        RPM_NAME: ${{ inputs.name }}
+      run: dnf remove -y "$RPM_NAME"

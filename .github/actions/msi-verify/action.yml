@@ -1,0 +1,60 @@
+name: MSI verify
+description: Extract and install an .msi with msiexec, check expected paths and a smoke command, then uninstall it.
+
+# The msiexec steps use cmd because a batch line started with start /wait waits for msiexec and passes its exit code to the runner.
+# Exit code 3010 (success, restart needed) fails the step.
+
+inputs:
+  package:
+    description: 'The .msi to verify.'
+    required: true
+  expect-files:
+    description: 'Installed paths that must exist, one per line; %LOCALAPPDATA% style variables are expanded.'
+    required: false
+    default: ''
+  smoke-command:
+    description: 'PowerShell command to run while installed; must not need a display, so use a CLI flag such as --version.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Extract the package
+      shell: cmd
+      env:
+        MSI_PACKAGE: ${{ inputs.package }}
+      # An administrative extract reads every file in the package without installing it.
+      run: start "" /wait msiexec /a "%MSI_PACKAGE%" /qn TARGETDIR="%RUNNER_TEMP%\msi-verify-admin" /l*v "%RUNNER_TEMP%\msi-verify-admin.log"
+
+    - name: Install the package
+      shell: cmd
+      env:
+        MSI_PACKAGE: ${{ inputs.package }}
+      run: start "" /wait msiexec /i "%MSI_PACKAGE%" /qn /l*v "%RUNNER_TEMP%\msi-verify-install.log"
+
+    - name: Check the expected paths
+      if: inputs.expect-files != ''
+      shell: pwsh
+      env:
+        MSI_EXPECT_FILES: ${{ inputs.expect-files }}
+      # The runner stops a pwsh step on any error, so a missing path fails here.
+      run: Get-Item -LiteralPath ([Environment]::ExpandEnvironmentVariables($env:MSI_EXPECT_FILES).Split([char]10, [StringSplitOptions]'RemoveEmptyEntries, TrimEntries'))
+
+    - name: Run the smoke command
+      if: inputs.smoke-command != ''
+      shell: pwsh
+      env:
+        MSI_SMOKE: ${{ inputs.smoke-command }}
+      run: pwsh -NoProfile -NonInteractive -Command $env:MSI_SMOKE
+
+    - name: Uninstall the package
+      shell: cmd
+      env:
+        MSI_PACKAGE: ${{ inputs.package }}
+      run: start "" /wait msiexec /x "%MSI_PACKAGE%" /qn /l*v "%RUNNER_TEMP%\msi-verify-uninstall.log"
+
+    - name: Show the msiexec logs
+      if: failure()
+      shell: pwsh
+      run: Get-Content -Tail 80 -Path "$env:RUNNER_TEMP\msi-verify-*.log"

@@ -1,0 +1,53 @@
+name: MSIX verify
+description: Install a signed .msix with Add-AppxPackage, check the executable and a smoke run, then remove it.
+
+# The Appx module is native to Windows PowerShell; under pwsh it needs a compatibility session.
+# Add-AppxPackage rejects a package whose signature is bad or does not chain to a trusted root.
+# Each step looks the package up by identity name; a missing package gives a null value that fails the command.
+
+inputs:
+  package:
+    description: 'The signed .msix to verify.'
+    required: true
+  identity-name:
+    description: 'Package identity name, such as Company.App.'
+    required: true
+  executable:
+    description: 'Path of the app .exe, relative to the package root.'
+    required: true
+  smoke-arguments:
+    description: 'Arguments for a smoke run of the executable; must not need a display, so use a CLI flag such as --version.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install the package
+      shell: powershell
+      env:
+        MSIX_PACKAGE: ${{ inputs.package }}
+      run: Add-AppxPackage -Path $env:MSIX_PACKAGE
+
+    - name: Check the executable
+      shell: powershell
+      env:
+        MSIX_IDENTITY: ${{ inputs.identity-name }}
+        MSIX_EXECUTABLE: ${{ inputs.executable }}
+      run: Get-Item -LiteralPath (Join-Path (Get-AppxPackage -Name $env:MSIX_IDENTITY).InstallLocation $env:MSIX_EXECUTABLE)
+
+    - name: Run the smoke check
+      if: inputs.smoke-arguments != ''
+      shell: powershell
+      env:
+        MSIX_IDENTITY: ${{ inputs.identity-name }}
+        MSIX_EXECUTABLE: ${{ inputs.executable }}
+        MSIX_SMOKE_ARGUMENTS: ${{ inputs.smoke-arguments }}
+      # The app is a GUI executable, so Start-Process waits for it and the exit code ends the step.
+      run: '[Environment]::Exit((Start-Process -FilePath (Join-Path (Get-AppxPackage -Name $env:MSIX_IDENTITY).InstallLocation $env:MSIX_EXECUTABLE) -ArgumentList $env:MSIX_SMOKE_ARGUMENTS -Wait -PassThru -NoNewWindow).ExitCode)'
+
+    - name: Remove the package
+      shell: powershell
+      env:
+        MSIX_IDENTITY: ${{ inputs.identity-name }}
+      run: Remove-AppxPackage -Package (Get-AppxPackage -Name $env:MSIX_IDENTITY).PackageFullName

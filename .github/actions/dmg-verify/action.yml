@@ -1,0 +1,61 @@
+name: DMG verify
+description: Verify and mount a .dmg with hdiutil, check the app, its signature and a smoke command, then detach it.
+
+inputs:
+  package:
+    description: 'The .dmg to verify.'
+    required: true
+  app:
+    description: 'Name of the .app inside the image, such as Name.app.'
+    required: true
+  signed:
+    description: 'Set to true to check the app signature with codesign.'
+    required: false
+    default: 'false'
+  smoke-command:
+    description: 'Bash command to run with APP_PATH set to the mounted app; must not need a display, so use a CLI flag such as --version.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Verify the image
+      shell: bash
+      env:
+        DMG_PACKAGE: ${{ inputs.package }}
+      run: hdiutil verify "$DMG_PACKAGE"
+
+    - name: Mount the image
+      shell: bash
+      env:
+        DMG_PACKAGE: ${{ inputs.package }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/dmg-verify"
+        hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$RUNNER_TEMP/dmg-verify" "$DMG_PACKAGE"
+
+    - name: Check the app
+      shell: bash
+      env:
+        DMG_APP: ${{ inputs.app }}
+      run: ls -d "$RUNNER_TEMP/dmg-verify/$DMG_APP"
+
+    - name: Check the signature
+      if: inputs.signed == 'true'
+      shell: bash
+      env:
+        DMG_APP: ${{ inputs.app }}
+      run: codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/dmg-verify/$DMG_APP"
+
+    - name: Run the smoke command
+      if: inputs.smoke-command != ''
+      shell: bash
+      env:
+        APP_PATH: ${{ runner.temp }}/dmg-verify/${{ inputs.app }}
+        DMG_SMOKE: ${{ inputs.smoke-command }}
+      run: bash -euo pipefail -c "$DMG_SMOKE"
+
+    - name: Detach the image
+      if: always()
+      shell: bash
+      run: hdiutil detach "$RUNNER_TEMP/dmg-verify"

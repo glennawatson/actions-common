@@ -1,0 +1,51 @@
+name: AppImage verify
+description: Extract an AppImage with its own runtime, check AppRun and the desktop file, run a smoke check, then clean up.
+
+inputs:
+  package:
+    description: 'The .AppImage to verify.'
+    required: true
+  smoke-arguments:
+    description: 'Arguments for a smoke run of AppRun; must not need a display, so use a CLI flag such as --version.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Copy the AppImage
+      shell: bash
+      env:
+        APPIMAGE_PACKAGE: ${{ inputs.package }}
+      # The copy leaves the caller's file untouched and gives the extract step a fixed path.
+      run: |
+        mkdir -p "$RUNNER_TEMP/appimage-verify"
+        cp "$APPIMAGE_PACKAGE" "$RUNNER_TEMP/appimage-verify/verify.AppImage"
+        chmod +x "$RUNNER_TEMP/appimage-verify/verify.AppImage"
+
+    - name: Extract the AppImage
+      shell: bash
+      working-directory: ${{ runner.temp }}/appimage-verify
+      # The runtime extracts the image itself, so FUSE is not needed.
+      run: ./verify.AppImage --appimage-extract
+
+    - name: Check AppRun and the desktop file
+      shell: bash
+      working-directory: ${{ runner.temp }}/appimage-verify
+      run: |
+        test -x squashfs-root/AppRun
+        ls -d squashfs-root/AppRun squashfs-root/*.desktop
+
+    - name: Run the smoke check
+      if: inputs.smoke-arguments != ''
+      shell: bash
+      working-directory: ${{ runner.temp }}/appimage-verify
+      env:
+        APPIMAGE_SMOKE_ARGUMENTS: ${{ inputs.smoke-arguments }}
+      # Left unquoted so each word becomes its own argument.
+      run: squashfs-root/AppRun $APPIMAGE_SMOKE_ARGUMENTS
+
+    - name: Clean up
+      if: always()
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/appimage-verify"

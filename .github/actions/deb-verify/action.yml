@@ -1,0 +1,61 @@
+name: DEB verify
+description: Install a .deb with dpkg, verify its files, check expected paths and a smoke command, then purge it.
+
+inputs:
+  package:
+    description: 'The .deb to verify.'
+    required: true
+  name:
+    description: 'Package name.'
+    required: true
+  expect-files:
+    description: 'Installed paths that must exist, one per line; paths must not contain spaces.'
+    required: false
+    default: ''
+  smoke-command:
+    description: 'Bash command to run while installed; must not need a display, so use a CLI flag such as --version.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install the package
+      shell: bash
+      env:
+        DEB_PACKAGE: ${{ inputs.package }}
+      # dpkg does not fetch dependencies, so a dependency missing on the runner fails here.
+      run: sudo dpkg -i "$DEB_PACKAGE"
+
+    - name: Verify the installed files
+      shell: bash
+      working-directory: /
+      env:
+        DEB_NAME: ${{ inputs.name }}
+      # dpkg --verify reports changed files but exits 0, so md5sum checks dpkg's own hash list,
+      # whose paths are relative to the root. A Multi-Arch: same package keeps it as name:arch.md5sums.
+      run: |
+        dpkg -L "$DEB_NAME"
+        dpkg --verify "$DEB_NAME"
+        md5sum --check --quiet "/var/lib/dpkg/info/$DEB_NAME.md5sums"
+
+    - name: Check the expected paths
+      if: inputs.expect-files != ''
+      shell: bash
+      env:
+        DEB_EXPECT_FILES: ${{ inputs.expect-files }}
+      # Left unquoted so each line becomes its own path.
+      run: ls -d $DEB_EXPECT_FILES
+
+    - name: Run the smoke command
+      if: inputs.smoke-command != ''
+      shell: bash
+      env:
+        DEB_SMOKE: ${{ inputs.smoke-command }}
+      run: bash -euo pipefail -c "$DEB_SMOKE"
+
+    - name: Remove the package
+      shell: bash
+      env:
+        DEB_NAME: ${{ inputs.name }}
+      run: sudo dpkg --purge "$DEB_NAME"
