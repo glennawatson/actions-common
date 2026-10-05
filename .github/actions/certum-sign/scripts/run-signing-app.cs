@@ -5,6 +5,8 @@
 
 using System.Diagnostics;
 
+Directory.SetCurrentDirectory(Environment.GetEnvironmentVariable("GITHUB_WORKSPACE") ?? Directory.GetCurrentDirectory());
+
 var app = Environment.GetEnvironmentVariable("SIGNING_APP") ?? throw new InvalidOperationException("SIGNING_APP is required.");
 
 var kind = Environment.GetEnvironmentVariable("SIGNING_KIND") ?? throw new InvalidOperationException("SIGNING_KIND is required.");

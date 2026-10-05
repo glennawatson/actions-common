@@ -6,6 +6,8 @@
 using System.Diagnostics;
 using System.Text.Json;
 
+Directory.SetCurrentDirectory(Environment.GetEnvironmentVariable("GITHUB_WORKSPACE") ?? Directory.GetCurrentDirectory());
+
 var project = Environment.GetEnvironmentVariable("PREPARATION_PROJECT") ?? throw new InvalidOperationException("PREPARATION_PROJECT is required.");
 
 var configuration = Environment.GetEnvironmentVariable("PREPARATION_CONFIGURATION") ?? "Release";
