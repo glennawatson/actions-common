@@ -7,6 +7,8 @@ using System.Diagnostics;
 using YamlDotNet.RepresentationModel;
 const string ScriptFile = "SCRIPT_FILE";
 
+const string ScriptArguments = "SCRIPT_ARGUMENTS";
+
 const string ExpectedArguments = "one value\nsemi;colon\nliteral $(value)\nliteral $(value)\n";
 
 const int FixtureFailureExitCode = 7;
@@ -24,7 +26,13 @@ try
     var launcher = Path.Combine(scratch, "runner.sh");
     File.WriteAllText(launcher, $"#!/usr/bin/env dotnet\n#:include {Path.Combine(action, "Run.cs")}\n");
     var fixture = Path.Combine(scratch, "argument-fixture.cs");
-    File.WriteAllText(fixture, "#!/usr/bin/env dotnet\nif (args is [\"exit7\"]) return 7;\nforeach (var value in args) Console.WriteLine(value);\nreturn 0;\n");
+    File.WriteAllText(fixture, """
+        #!/usr/bin/env dotnet
+        if (args is ["exit7"]) return 7;
+        if (args is ["streams"]) { Console.WriteLine("stdout marker"); Console.Error.WriteLine("stderr marker"); return 0; }
+        foreach (var value in args) Console.WriteLine(value);
+        return 0;
+        """);
     var envFile = Path.Combine(scratch, "github.env");
     var environment = Run(
     new() { [ScriptFile] = Path.Combine(root, ".github/actions/dotnet-environment/scripts/configure--net-cli-environment.cs"), ["GITHUB_ENV"] = envFile, });
@@ -40,10 +48,19 @@ try
         ["PROBE_VALUE"] = "literal $(value)",
     });
     Check(
-    arguments.ExitStatus.ExitCode == 0 && arguments.StandardOutput.Replace("\r", string.Empty, StringComparison.Ordinal).EndsWith(ExpectedArguments, StringComparison.Ordinal),
+    arguments.ExitStatus.ExitCode == 0
+        && arguments.StandardOutput.Contains("$PROBE_VALUE", StringComparison.Ordinal)
+        && arguments.StandardOutput.Replace("\r", string.Empty, StringComparison.Ordinal).EndsWith(ExpectedArguments, StringComparison.Ordinal),
     "Keep spaces and shell characters in arguments");
-    var failure = Run(new() { [ScriptFile] = fixture, ["SCRIPT_ARGUMENTS"] = "exit7" });
+    var failure = Run(new() { [ScriptFile] = fixture, [ScriptArguments] = "exit7" });
     Check(failure.ExitStatus.ExitCode == FixtureFailureExitCode, "Return the child exit code");
+    var streams = Run(new() { [ScriptFile] = fixture, [ScriptArguments] = "streams" });
+    Check(
+    streams.ExitStatus.ExitCode == 0
+        && streams.StandardOutput.Contains("[command]dotnet run --file", StringComparison.Ordinal)
+        && streams.StandardOutput.Contains("stdout marker", StringComparison.Ordinal)
+        && streams.StandardError.Contains("stderr marker", StringComparison.Ordinal),
+    "Show the child command and forward both output streams");
     var output = Path.Combine(scratch, "shared.output");
     var shared = Run(new() { ["SHARED_SCRIPT"] = "resolve-built-commit-sha-c775df1621.cs", ["GITHUB_OUTPUT"] = output, });
     Check(
@@ -100,7 +117,7 @@ try
             $"Preserve MinVer output values for {version}");
     }
 
-    Console.WriteLine("7 runner checks passed.");
+    Console.WriteLine("8 runner checks passed.");
     return 0;
 
     ProcessTextOutput Run(Dictionary<string, string> variables)
@@ -110,7 +127,7 @@ try
         start.Environment["ACTION_PATH"] = action;
         start.Environment[ScriptFile] = string.Empty;
         start.Environment["SHARED_SCRIPT"] = string.Empty;
-        start.Environment["SCRIPT_ARGUMENTS"] = string.Empty;
+        start.Environment[ScriptArguments] = string.Empty;
         foreach (var item in variables)
         {
             start.Environment[item.Key] = item.Value;

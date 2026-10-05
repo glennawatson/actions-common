@@ -28,4 +28,6 @@ var path = Path.GetFullPath(script, workspace);
 var arguments = (GetEnvironmentVariable("SCRIPT_ARGUMENTS") ?? string.Empty)
     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
 
+Console.WriteLine($"[command]dotnet run --file {path} -- {string.Join(' ', arguments)}");
+
 return Process.Run("dotnet", ["run", "--file", path, "--", .. arguments]).ExitCode;

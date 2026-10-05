@@ -13,6 +13,9 @@ var command = Expand(GetEnvironmentVariable("COMMAND_FILE")!);
 var arguments = (GetEnvironmentVariable("COMMAND_ARGUMENTS") ?? string.Empty)
     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
 
+// Log variable names before expansion to keep credentials out of the command trace.
+Console.WriteLine($"[command]{GetEnvironmentVariable("COMMAND_FILE")} {string.Join(' ', arguments)}");
+
 for (var index = 0; index < arguments.Length; index++)
 {
     arguments[index] = Expand(arguments[index]);

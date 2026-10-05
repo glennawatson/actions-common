@@ -3,6 +3,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 using System.Diagnostics;
+using System.Text;
 using static System.Environment;
 const int MaximumSigningAttempts = 15;
 
@@ -48,9 +49,8 @@ foreach (var package in packages)
     // jsign auto-selects the token's single key; the RFC3161 timestamp outlives the certificate.
     for (var attempt = 1; attempt <= MaximumSigningAttempts; attempt++)
     {
-        var result = Process.RunAndCaptureText(
-            "java",
-            [
+        string[] commandArguments =
+        [
     "-jar",
     jar,
     "--storetype",
@@ -66,19 +66,30 @@ foreach (var package in packages)
     "--tsaurl",
     timestampUrl,
     "--replace",
-    package]);
+    package];
 
-        var output = result.StandardOutput + result.StandardError;
-        Console.WriteLine(output);
+        Console.WriteLine($"[command]java {string.Join(' ', commandArguments)}");
 
-        if (result is { ExitStatus.ExitCode: 0 })
+        var start = new ProcessStartInfo("java", commandArguments) { RedirectStandardOutput = true, RedirectStandardError = true };
+
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start jsign.");
+
+        var standardOutput = ForwardOutputAsync(process.StandardOutput, Console.Out);
+
+        var standardError = ForwardOutputAsync(process.StandardError, Console.Error);
+
+        var status = await process.WaitForExitStatusAsync().ConfigureAwait(false);
+
+        var output = await standardOutput.ConfigureAwait(false) + await standardError.ConfigureAwait(false);
+
+        if (status.ExitCode == 0)
         {
             break;
         }
 
         if (!output.Contains("No certificate found", StringComparison.Ordinal))
         {
-            return result.ExitStatus.ExitCode;
+            return status.ExitCode;
         }
 
         if (attempt is MaximumSigningAttempts)
@@ -100,3 +111,15 @@ foreach (var package in packages)
 }
 
 return 0;
+
+static async Task<string> ForwardOutputAsync(StreamReader source, TextWriter destination)
+{
+    var captured = new StringBuilder();
+    while (await source.ReadLineAsync().ConfigureAwait(false) is { } line)
+    {
+        _ = captured.AppendLine(line);
+        await destination.WriteLineAsync(line).ConfigureAwait(false);
+    }
+
+    return captured.ToString();
+}
