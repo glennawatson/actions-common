@@ -1,0 +1,328 @@
+name: Common .NET build and release workflow
+
+# packages: read lets the sign job pull the internal signer image; callers must grant it too.
+permissions:
+  contents: write
+  packages: read
+
+on:
+  workflow_call:
+    inputs:
+      configuration:
+        type: string
+        default: 'Release'
+        description: 'Build configuration'
+
+      dotnetVersions:
+        type: string
+        default: |
+          8.0.x
+          9.0.x
+          10.0.x
+          11.0.x
+        description: 'Newline-separated list of .NET SDKs'
+
+      solutionFile:
+        type: string
+        description: 'Solution file relative to srcFolder'
+
+      srcFolder:
+        type: string
+        default: 'src'
+        description: 'Folder containing the solution'
+
+      minverMinimumMajorMinor:
+        type: string
+        default: ''
+        description: 'floor major.minor when no tag is reachable.'
+
+      minverTagPrefix:
+        type: string
+        default: 'v'
+        description: 'git tag prefix MinVer expects.'
+
+      minverAutoIncrement:
+        type: string
+        default: 'minor'
+        description: 'auto-increment segment (major|minor|patch).'
+
+      minverDefaultPreReleaseIdentifiers:
+        type: string
+        default: 'alpha.0'
+        description: 'pre-release identifier(s) for height-only builds.'
+
+      installWorkloads:
+        type: boolean
+        default: false
+        description: 'Run dotnet workload restore'
+
+      useUNO:
+        type: boolean
+        default: false
+        description: 'Enable UNO-specific msbuild/pack flow (Windows only)'
+
+      msbuildSolutionFile:
+        type: string
+        default: ''
+        description: 'Optional solution or solution filter, relative to srcFolder, whose projects need MSBuild (e.g. Uno.Sdk projects). Built and packed with MSBuild after the dotnet pack, into the same package set that is signed and published. Needs a Windows buildOs. Empty = none.'
+
+      signingTimestampUrl:
+        type: string
+        default: 'http://time.certum.pl'
+        description: 'RFC3161 timestamp server URL used when signing NuGet packages'
+
+      bump:
+        type: string
+        default: ''
+        description: 'Release level (major|minor|patch) to cut a clean RTM version and push a tag before building. Empty = normal CI build (MinVer pre-release at HEAD, no tag). Mutually exclusive with versionOverride.'
+
+      preRelease:
+        type: string
+        default: ''
+        description: 'Pre-release channel identifier (e.g. alpha, beta, rc) to cut a pre-release instead of a stable version. Requires bump (the channel rides on the bumped core); the version becomes <bumped-core>-<channel>.<N> with <N> auto-incrementing from existing <prefix><core>-<channel>.<N> tags. Empty = stable RTM release. Mutually exclusive with versionOverride.'
+
+      versionOverride:
+        type: string
+        default: ''
+        description: 'Exact version to stamp (e.g. "11.4.13"), bypassing the bump-from-latest-tag math and the MinVer git walk. Use for an out-of-sequence / backport release whose number does not follow from the newest tag (e.g. shipping an 11.4.x patch while main is on 12.x). The release tag becomes <minverTagPrefix><versionOverride>. Mutually exclusive with bump.'
+
+      buildOs:
+        type: string
+        default: 'windows-latest'
+        description: 'Runner for the build/pack job (e.g. windows-latest, ubuntu-latest). Certum signing always runs on Linux regardless. Defaults to windows-latest because several projects have Windows-specific build logic.'
+
+      sourceRef:
+        type: string
+        default: ''
+        description: 'Git ref (branch, tag, or SHA) to build/pack. Empty = the ref that triggered the run (normally the default branch). Use this to re-release historical source (e.g. a tag) with the current signing pipeline.'
+
+    outputs:
+      semver2:
+        description: 'MinVer SemVer2 version string.'
+        value: ${{ jobs.build.outputs.semver2 }}
+      tag:
+        description: 'Tag pushed for a bump release (e.g. v2.4.0 or v6.0.0-beta.1). Empty for CI builds.'
+        value: ${{ jobs.build.outputs.tag }}
+      prerelease:
+        description: 'true when the released version is a pre-release (preRelease channel set, or a hyphenated versionOverride). Pass to workflow-common-create-release so the GitHub release is flagged pre-release.'
+        value: ${{ jobs.build.outputs.prerelease }}
+      sourceSha:
+        description: 'Resolved commit SHA that was actually built (honors the sourceRef input). Pass to workflow-common-create-release as target so the new release tag points at the built commit.'
+        value: ${{ jobs.build.outputs.sourceSha }}
+
+    secrets:
+      CERTUM_USER_ID:
+        required: true
+        description: 'Certum SimplySign login username'
+
+      CERTUM_OTP_URI:
+        required: true
+        description: 'Full otpauth:// URI for Certum SimplySign TOTP'
+
+      CERTUM_CERT_FINGERPRINT:
+        required: true
+        description: 'SHA-256 fingerprint of the Certum code-signing certificate'
+
+jobs:
+  build:
+    environment:
+      name: release
+    runs-on: ${{ inputs.buildOs }}
+    outputs:
+      semver2: ${{ steps.minver.outputs.SemVer2 }}
+      tag: ${{ steps.tagname.outputs.tag }}
+      prerelease: ${{ steps.tagname.outputs.prerelease }}
+      sourceSha: ${{ steps.sourcesha.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.sourceRef }}
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        with:
+          dotnet-versions: ${{ inputs.dotnetVersions }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          install-workloads: ${{ inputs.installWorkloads }}
+          stamp-version: 'false'
+
+      - name: Resolve built commit SHA
+        id: sourcesha
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version inputs
+        shell: bash
+        env:
+          BUMP: ${{ inputs.bump }}
+          PRE_RELEASE: ${{ inputs.preRelease }}
+          VERSION_OVERRIDE: ${{ inputs.versionOverride }}
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - -- "$BUMP" "$PRE_RELEASE" "$VERSION_OVERRIDE" <<'CS'
+          if (args is not [var bump, var preRelease, var versionOverride])
+          {
+              Console.WriteLine("::error::Expected the bump, pre-release and version override arguments.");
+              return 2;
+          }
+
+          string? error = (bump, preRelease, versionOverride) switch
+          {
+              (not "", _, not "") => "'bump' and 'versionOverride' are mutually exclusive — set exactly one.",
+              (_, not "", not "") => "'preRelease' cannot be combined with 'versionOverride' (the override is stamped verbatim — put any pre-release suffix in the override itself).",
+              ("", not "", _) => "'preRelease' requires 'bump' (major|minor|patch) so the channel has a core version to attach to.",
+              _ => null,
+          };
+
+          if (error is not null)
+          {
+              Console.WriteLine($"::error::{error}");
+              return 1;
+          }
+
+          return 0;
+          CS
+
+      # workflow-common-create-release creates the tag, so a failed build or sign leaves no orphan tag.
+      - name: Compute version and tag
+        if: inputs.bump != '' && inputs.versionOverride == ''
+        id: bump
+        uses: reactiveui/actions-common/.github/actions/compute-version-and-tag@main
+        with:
+          bump: ${{ inputs.bump }}
+          tag-prefix: ${{ inputs.minverTagPrefix }}
+          pre-release-id: ${{ inputs.preRelease }}
+          push-tag: 'false'
+
+      # compute-version-and-tag rejects an existing bump tag; an existing override tag is rejected here.
+      - name: Resolve release tag
+        id: tagname
+        shell: bash
+        env:
+          BUMP_TAG: ${{ steps.bump.outputs.tag }}
+          BUMP_PRERELEASE: ${{ steps.bump.outputs.prerelease }}
+          VERSION_OVERRIDE: ${{ inputs.versionOverride }}
+          TAG_PREFIX: ${{ inputs.minverTagPrefix }}
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - -- "$BUMP_TAG" "$BUMP_PRERELEASE" "$VERSION_OVERRIDE" "$TAG_PREFIX" <<'CS'
+          using System.Diagnostics;
+          using static System.Environment;
+
+          if (args is not [var bumpTag, var bumpPrerelease, var versionOverride, var tagPrefix])
+          {
+              Console.WriteLine("::error::Expected the bump tag, bump pre-release, version override and tag prefix arguments.");
+              return 2;
+          }
+
+          var outputs = GetEnvironmentVariable("GITHUB_OUTPUT")!;
+          if (versionOverride is "")
+          {
+              File.AppendAllLines(outputs, [$"tag={bumpTag}", $"prerelease={(bumpPrerelease is "" ? "false" : bumpPrerelease)}"]);
+              return 0;
+          }
+
+          var tag = $"{tagPrefix}{versionOverride}";
+          Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE")!);
+          if (Process.Run("git", ["rev-parse", "-q", "--verify", $"refs/tags/{tag}"], silent: true) is { ExitCode: 0 })
+          {
+              Console.WriteLine($"::error::Tag {tag} already exists. Refusing to re-release an existing version.");
+              return 1;
+          }
+
+          File.AppendAllLines(outputs, [$"tag={tag}", $"prerelease={(versionOverride.Contains('-') ? "true" : "false")}"]);
+          return 0;
+          CS
+
+      - name: Stamp version with MinVer
+        id: minver
+        uses: reactiveui/actions-common/.github/actions/minver@main
+        with:
+          tag-prefix: ${{ inputs.minverTagPrefix }}
+          minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
+          default-pre-release-identifiers: ${{ inputs.minverDefaultPreReleaseIdentifiers }}
+          auto-increment: ${{ inputs.minverAutoIncrement }}
+          version-override: ${{ inputs.versionOverride }}
+
+      - name: Build (dotnet)
+        if: inputs.useUNO == false
+        uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          create-packages: 'false'
+
+      - name: Build (UNO)
+        if: inputs.useUNO == true
+        uses: reactiveui/actions-common/.github/actions/dotnet-build-uno@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+
+      # SOLUTION_FILE stays unquoted so an empty value passes no argument.
+      - name: Pack NuGet packages
+        shell: bash
+        working-directory: ${{ inputs.srcFolder }}
+        env:
+          CONFIGURATION: ${{ inputs.configuration }}
+          SOLUTION_FILE: ${{ inputs.solutionFile }}
+        run: dotnet pack --no-restore --configuration "$CONFIGURATION" $SOLUTION_FILE -o "${GITHUB_WORKSPACE}/packages"
+
+      - name: Build and pack (MSBuild)
+        if: inputs.msbuildSolutionFile != ''
+        uses: reactiveui/actions-common/.github/actions/dotnet-build-uno@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.msbuildSolutionFile }}
+          package-output: ${{ github.workspace }}/packages
+
+      - name: Upload unsigned packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: unsigned-nuget
+          path: packages/*.nupkg
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    # Without this the job token lacks packages: read and the GHCR image pull is denied.
+    permissions:
+      contents: read
+      packages: read
+    environment:
+      name: release
+    # SimplySign has no headless API; certum-sign drives its GUI under Xvfb, which needs Linux.
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/reactiveui/certum-signer:latest@sha256:a609cf99c5bdb673fa7b1e48c2dd6c3b0a559377a0278f673889f3b2f4ebe6ce
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    # Composite actions cannot declare secret inputs, so certum-sign reads these from env.
+    env:
+      CERTUM_USER_ID: ${{ secrets.CERTUM_USER_ID }}
+      CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+      CERTUM_CERT_FINGERPRINT: ${{ secrets.CERTUM_CERT_FINGERPRINT }}
+    steps:
+      - name: Download unsigned packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: unsigned-nuget
+          path: signed
+
+      - name: Sign packages with Certum SimplySign (prebuilt image)
+        uses: reactiveui/actions-common/.github/actions/certum-sign@main
+        with:
+          packages-glob: 'signed/*.nupkg'
+          timestamp-url: ${{ inputs.signingTimestampUrl }}
+
+      - name: Upload Signed Packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-nuget
+          path: signed/*.nupkg
+          if-no-files-found: error

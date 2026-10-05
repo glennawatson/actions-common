@@ -1,0 +1,163 @@
+name: Common CodeQL Analysis
+
+permissions:
+  security-events: write
+  contents: read
+  packages: read
+  actions: read
+
+concurrency:
+  group: common-codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') }}
+
+on:
+  workflow_call:
+    inputs:
+      dotnetVersions:
+        type: string
+        default: |
+          8.0.x
+          9.0.x
+          10.0.x
+          11.0.x
+        description: 'Newline-separated list of .NET SDK versions'
+
+      srcFolder:
+        type: string
+        default: 'src'
+        description: 'Folder containing the solution'
+
+      solutionFile:
+        type: string
+        default: ''
+        description: 'Solution file relative to srcFolder'
+
+      configuration:
+        type: string
+        default: 'Release'
+        description: 'Build configuration'
+
+      installWorkloads:
+        type: boolean
+        default: false
+        description: 'Run workload restore before build'
+
+      analyzeCSharp:
+        type: boolean
+        default: true
+        description: 'Run CodeQL C# analysis with manual build'
+
+      csharpRunsOn:
+        type: string
+        default: 'windows-latest'
+        description: 'Runner for C# analysis (use windows-latest for projects with Windows-specific targets)'
+
+      analyzeActions:
+        type: boolean
+        default: true
+        description: 'Run CodeQL GitHub Actions analysis'
+
+      analyzeJavaScript:
+        type: boolean
+        default: false
+        description: 'Run CodeQL JavaScript/TypeScript analysis'
+
+jobs:
+  changes:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+      workflows: ${{ steps.changes.outputs.workflows }}
+    steps:
+    - name: Detect changed areas
+      id: changes
+      uses: reactiveui/actions-common/.github/actions/detect-changes@main
+
+  # Code is analysed when code changes and GitHub Actions when .github changes. A skipped job still passes a
+  # required check.
+  analyze-csharp:
+    name: Analyze C#
+    needs: changes
+    if: ${{ !cancelled() && inputs.analyzeCSharp && needs.changes.outputs.code != 'false' }}
+    runs-on: ${{ inputs.csharpRunsOn }}
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET Environment
+      uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+      with:
+        dotnet-versions: ${{ inputs.dotnetVersions }}
+        src-folder: ${{ inputs.srcFolder }}
+        solution-file: ${{ inputs.solutionFile }}
+        install-workloads: ${{ inputs.installWorkloads && 'true' || 'false' }}
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+      with:
+        languages: csharp
+        build-mode: manual
+        queries: security-extended
+
+    - name: Build
+      uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+      with:
+        configuration: ${{ inputs.configuration }}
+        src-folder: ${{ inputs.srcFolder }}
+        solution-file: ${{ inputs.solutionFile }}
+        create-packages: 'false'
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+      with:
+        category: "/language:csharp"
+
+  analyze-actions:
+    name: Analyze GitHub Actions
+    needs: changes
+    if: ${{ !cancelled() && inputs.analyzeActions && needs.changes.outputs.workflows != 'false' }}
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+      with:
+        languages: actions
+        queries: security-extended
+        # Trusts reactiveui in actions/unpinned-tag; see publish-codeql-model-pack.yml.
+        packs: reactiveui/actions-trusted-owners
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+      with:
+        category: "/language:actions"
+
+  analyze-javascript:
+    name: Analyze JavaScript
+    needs: changes
+    if: ${{ !cancelled() && inputs.analyzeJavaScript && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+      with:
+        languages: javascript-typescript
+        queries: security-extended
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
+      with:
+        category: "/language:javascript-typescript"

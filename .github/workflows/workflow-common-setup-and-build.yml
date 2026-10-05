@@ -1,112 +1,405 @@
-name: Common .NET build
+name: Common .NET setup and build workflow
+
+permissions:
+  contents: read
+  actions: write   # deletes the per-OS coverage artifacts
+
+concurrency:
+  group: common-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') }}
+
 on:
   workflow_call:
     inputs:
-      runner:
-        description: Runner for this build.
-        type: string
-        default: ubuntu-latest
-      solutionFile:
-        description: Solution relative to srcFolder.
-        type: string
-        required: true
-      srcFolder:
-        description: Folder containing the solution and global.json.
-        type: string
-        default: src
       configuration:
-        description: Build configuration.
         type: string
-        default: Release
+        default: 'Release'
+        description: 'Build configuration'
+
       dotnetVersions:
-        description: Newline-separated SDK versions. Include .NET 11 for the shared scripts.
         type: string
         default: |
           8.0.x
+          9.0.x
           10.0.x
           11.0.x
-      stampVersion:
-        description: Compute the version with MinVer.
+        description: 'Newline-separated list of .NET SDKs'
+
+      productNamespacePrefix:
+        type: string
+        required: false
+        default: ''
+        description: 'Deprecated/unused: coverage filtering is driven by testconfig.json under MTP. Retained so existing callers can keep passing it.'
+
+      solutionFile:
+        type: string
+        description: 'Solution file relative to srcFolder'
+
+      srcFolder:
+        type: string
+        default: 'src'
+        description: 'Folder containing the solution'
+
+      performTests:
         type: boolean
         default: true
-      minverTagPrefix:
-        description: Prefix on release tags.
+        description: 'Run tests + collect coverage on each OS'
+
+      minverMinimumMajorMinor:
         type: string
         default: ''
-      minverMinimumMajorMinor:
-        description: Version floor when no tag exists.
+        description: 'floor major.minor when no tag is reachable (e.g. "1.0").'
+
+      minverTagPrefix:
         type: string
-        default: '1.0'
+        default: 'v'
+        description: 'git tag prefix MinVer expects.'
+
       minverAutoIncrement:
-        description: Segment to increment for development builds.
         type: string
-        default: patch
-      restoreRoslynSlots:
-        description: Restore the PublicApiSharp Roslyn projects before building.
+        default: 'minor'
+        description: 'auto-increment segment (major|minor|patch).'
+
+      minverDefaultPreReleaseIdentifiers:
+        type: string
+        default: 'alpha.0'
+        description: 'pre-release identifier(s) for height-only builds.'
+
+      installWorkloads:
         type: boolean
         default: false
-      testPreparationFile:
-        description: C# file to run with the test argument before building.
+        description: 'If true, run workload restore (all OSes)'
+
+      useUNO:
+        type: boolean
+        default: false
+        description: 'Enable UNO-specific steps on Windows (msbuild/pack flow)'
+
+      msbuildSolutionFile:
         type: string
         default: ''
-      testPreparationProject:
-        description: Project to publish and invoke before building; its assembly name must match the project filename.
+        description: 'Optional solution or solution filter, relative to srcFolder, whose projects need MSBuild (e.g. Uno.Sdk projects). It builds and tests in its own Windows job with MSBuild while solutionFile keeps the dotnet flow on every OS. Empty = no MSBuild job.'
+
+      msbuildPerformTests:
+        type: boolean
+        default: true
+        description: 'Run tests in the MSBuild job. Set false when msbuildSolutionFile holds no test project, since dotnet test fails when it finds none.'
+
+      installWindowsAppRuntime:
+        type: boolean
+        default: false
+        description: 'If true, install the Windows App SDK runtime on the Windows runner (needed to run WinUI tests)'
+
+      windowsAppRuntimeVersion:
+        type: string
+        # renovate: datasource=nuget depName=Microsoft.WindowsAppSDK
+        default: '2.5'
+        description: 'Windows App SDK major.minor whose runtime to install when installWindowsAppRuntime is true'
+
+      mergedCoverageArtifactName:
+        type: string
+        default: 'coverage-all'
+        description: 'Name of the artifact with all raw coverage reports'
+
+      cleanupPerOsArtifacts:
+        type: boolean
+        default: true
+        description: 'Delete the temporary per-OS artifacts after final upload'
+
+      uploadCodecov:
+        type: boolean
+        default: true
+        description: 'Upload coverage to Codecov in the collector job'
+
+      enableDetailedTestLogging:
+        type: boolean
+        default: true
+        description: 'Enable MTP diagnostic logging (Trace-level .diag files, sync writes, --output Detailed). Default on for hang/crash debuggability.'
+
+      testTimeout:
         type: string
         default: ''
-      testPreparationArguments:
-        description: JSON array of arguments for the preparation project.
+        description: 'Optional global MTP test timeout (format [h|m|s], e.g. "5m"). Empty = no timeout.'
+      testProjects:
         type: string
-        default: '["test"]'
-permissions:
-  contents: read
+        default: ''
+        description: 'Optional newline-separated globs, relative to the solution folder, choosing which projects to test (e.g. "tests/**/*.csproj"). A line starting with "!" excludes matches. Empty = every test project in the solution.'
+
+    secrets:
+      NuGetAPIKey:
+        required: false
+        description: 'API key for pushing packages to nuget.org'
+      CODECOV_TOKEN:
+        required: false
+        description: 'Token for uploading coverage reports to Codecov'
+
 jobs:
-  build:
-    name: Build and test
-    runs-on: ${{ inputs.runner }}
-    env:
-      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: '1'
+  changes:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        fetch-depth: 0
-    - name: Set up .NET
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
-      with:
-        dotnet-versions: ${{ inputs.dotnetVersions }}
-        stamp-version: ${{ inputs.stampVersion }}
-        minver-tag-prefix: ${{ inputs.minverTagPrefix }}
-        minver-minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
-        minver-auto-increment: ${{ inputs.minverAutoIncrement }}
-    - name: Restore Roslyn slots
-      if: inputs.restoreRoslynSlots
-      uses: glennawatson/actions-common/.github/actions/restore-roslyn-slots@main
-      with:
-        src-folder: ${{ inputs.srcFolder }}
-    - name: Prepare tests
-      if: inputs.testPreparationFile != ''
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
-      with:
-        script-file: ${{ inputs.testPreparationFile }}
-        arguments: test
-    - name: Prepare tests with application
-      if: inputs.testPreparationProject != ''
-      env:
-        PREPARATION_PROJECT: ${{ inputs.testPreparationProject }}
-        PREPARATION_ARGUMENTS: ${{ inputs.testPreparationArguments }}
-        PREPARATION_CONFIGURATION: ${{ inputs.configuration }}
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
-      with:
-        shared-script: prepare-tests-project.cs
-    - name: Build
-      uses: glennawatson/actions-common/.github/actions/dotnet-build@main
-      with:
-        src-folder: ${{ inputs.srcFolder }}
-        solution-file: ${{ inputs.solutionFile }}
-        configuration: ${{ inputs.configuration }}
-    - name: Test
-      uses: glennawatson/actions-common/.github/actions/dotnet-test@main
-      with:
-        src-folder: ${{ inputs.srcFolder }}
-        solution-file: ${{ inputs.solutionFile }}
-        configuration: ${{ inputs.configuration }}
+      - name: Detect changed areas
+        id: changes
+        uses: reactiveui/actions-common/.github/actions/detect-changes@main
+
+  # A change under .github alone skips the build. A skipped job still passes a required check.
+  build-windows:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
+    outputs:
+      nbgv: ${{ steps.environment.outputs.nbgv-semver2 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        id: environment
+        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        with:
+          dotnet-versions: ${{ inputs.dotnetVersions }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          install-workloads: ${{ inputs.installWorkloads }}
+          minver-tag-prefix: ${{ inputs.minverTagPrefix }}
+          minver-minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
+          minver-auto-increment: ${{ inputs.minverAutoIncrement }}
+          minver-default-pre-release-identifiers: ${{ inputs.minverDefaultPreReleaseIdentifiers }}
+
+      - name: Build (dotnet)
+        if: inputs.useUNO == false
+        uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          create-packages: 'false'
+
+      - name: Build (UNO)
+        if: inputs.useUNO == true
+        uses: reactiveui/actions-common/.github/actions/dotnet-build-uno@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+
+      # WinUI test hosts need the Windows App SDK runtime, an MSIX framework package neither workloads nor the image
+      # provide. Without it they run no tests and exit with 0x80670016.
+      - name: Install Windows App Runtime
+        if: inputs.installWindowsAppRuntime == true
+        shell: bash
+        env:
+          WINDOWS_APP_RUNTIME_VERSION: ${{ inputs.windowsAppRuntimeVersion }}
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - -- "$WINDOWS_APP_RUNTIME_VERSION" <<'CS'
+          #:property TargetFramework=net11.0-windows10.0.19041.0
+
+          using System.Diagnostics;
+          using System.Text.RegularExpressions;
+          using Windows.Management.Deployment;
+          using static System.Environment;
+
+          if (args is not [var version] || !Regex.IsMatch(version, @"^\d+\.\d+$"))
+          {
+              Console.WriteLine($"::error::windowsAppRuntimeVersion must be <major>.<minor>, got '{string.Join(' ', args)}'.");
+              return 1;
+          }
+
+          var installer = Path.Combine(GetEnvironmentVariable("RUNNER_TEMP")!, "windowsappruntimeinstall-x64.exe");
+          Console.WriteLine($"Downloading Windows App Runtime {version}");
+          using (var http = new HttpClient())
+          {
+              await File.WriteAllBytesAsync(installer, await http.GetByteArrayAsync($"https://aka.ms/windowsappsdk/{version}/latest/windowsappruntimeinstall-x64.exe"));
+          }
+
+          // 0x80073D06: a newer runtime is already installed.
+          if (Process.Run(installer, ["--quiet"]) is { ExitCode: not (0 or unchecked((int)0x80073D06)) } install)
+          {
+              Console.WriteLine($"::error::Windows App Runtime install failed with exit code {install.ExitCode}.");
+              return 1;
+          }
+
+          string[] runtimes =
+          [
+              .. new PackageManager().FindPackagesForUser(string.Empty)
+                  .Select(package => package.Id.Name)
+                  .Where(name => name.StartsWith("Microsoft.WindowsAppRuntime", StringComparison.Ordinal))
+                  .Distinct(),
+          ];
+
+          if (runtimes is [])
+          {
+              Console.WriteLine("::error::Windows App Runtime install reported success but no runtime package is registered.");
+              return 1;
+          }
+
+          Console.WriteLine($"Registered runtimes: {string.Join(", ", runtimes)}");
+          return 0;
+          CS
+
+      - name: Test
+        if: inputs.performTests == true
+        uses: reactiveui/actions-common/.github/actions/dotnet-test@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          enable-detailed-test-logging: ${{ inputs.enableDetailedTestLogging }}
+          test-timeout: ${{ inputs.testTimeout }}
+          test-projects: ${{ inputs.testProjects }}
+
+  # A skipped matrix job reports no per-OS check, so the steps skip instead and each required check still passes.
+  build-unix:
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
+    steps:
+      - name: Checkout
+        if: needs.changes.outputs.code != 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        if: needs.changes.outputs.code != 'false'
+        id: environment
+        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        with:
+          dotnet-versions: ${{ inputs.dotnetVersions }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          install-workloads: ${{ inputs.installWorkloads }}
+          minver-tag-prefix: ${{ inputs.minverTagPrefix }}
+          minver-minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
+          minver-auto-increment: ${{ inputs.minverAutoIncrement }}
+          minver-default-pre-release-identifiers: ${{ inputs.minverDefaultPreReleaseIdentifiers }}
+
+      - name: Build
+        if: needs.changes.outputs.code != 'false'
+        uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          create-packages: 'false'
+
+      - name: Test
+        if: needs.changes.outputs.code != 'false' && inputs.performTests == true
+        uses: reactiveui/actions-common/.github/actions/dotnet-test@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          enable-detailed-test-logging: ${{ inputs.enableDetailedTestLogging }}
+          test-timeout: ${{ inputs.testTimeout }}
+          test-projects: ${{ inputs.testProjects }}
+
+  # Projects that only MSBuild can build, such as Uno.Sdk projects, build and test here so the rest keep the dotnet flow.
+  build-msbuild:
+    needs: changes
+    if: ${{ !cancelled() && inputs.msbuildSolutionFile != '' && needs.changes.outputs.code != 'false' }}
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        with:
+          dotnet-versions: ${{ inputs.dotnetVersions }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.msbuildSolutionFile }}
+          install-workloads: ${{ inputs.installWorkloads }}
+          minver-tag-prefix: ${{ inputs.minverTagPrefix }}
+          minver-minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
+          minver-auto-increment: ${{ inputs.minverAutoIncrement }}
+          minver-default-pre-release-identifiers: ${{ inputs.minverDefaultPreReleaseIdentifiers }}
+
+      - name: Build (MSBuild)
+        uses: reactiveui/actions-common/.github/actions/dotnet-build-uno@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.msbuildSolutionFile }}
+
+      - name: Test
+        if: inputs.performTests == true && inputs.msbuildPerformTests == true
+        uses: reactiveui/actions-common/.github/actions/dotnet-test@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.msbuildSolutionFile }}
+          enable-detailed-test-logging: ${{ inputs.enableDetailedTestLogging }}
+          test-timeout: ${{ inputs.testTimeout }}
+          artifact-suffix: '-msbuild'
+
+  # The results are checked directly because the changes job skips on events other than push and pull_request.
+  collect-coverage:
+    needs:
+      - build-windows
+      - build-unix
+      - build-msbuild
+    if: ${{ !cancelled() && inputs.performTests == true && needs.build-windows.result == 'success' && needs.build-unix.result == 'success' && (needs.build-msbuild.result == 'success' || needs.build-msbuild.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for PR summary context)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Download temp coverage artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: tmp-coverage-*
+          path: ./.collect
+
+      - name: Merge per-OS coverage artifacts
+        uses: actions/upload-artifact/merge@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.mergedCoverageArtifactName }}
+          pattern: tmp-coverage-*
+          separate-directories: true
+          retention-days: 30
+          delete-merged: ${{ inputs.cleanupPerOsArtifacts }}
+
+      - name: Setup .NET Environment
+        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        with:
+          stamp-version: 'false'
+
+      - name: Install and Upload to Codecov
+        if: inputs.uploadCodecov == true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
+        shell: bash
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - <<'CS'
+          using System.Diagnostics;
+          using static System.Environment;
+
+          Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE")!);
+
+          if (Process.Run("pip", ["install", "codecov-cli"]) is { ExitCode: not 0 } install)
+          {
+              return install.ExitCode;
+          }
+
+          string[] files = [.. Directory.EnumerateFiles(".collect", "*.cobertura.xml", SearchOption.AllDirectories).SelectMany(file => (string[])["--file", file])];
+          return Process.Run("codecov-cli", ["upload-coverage", .. files]).ExitCode;
+          CS

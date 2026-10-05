@@ -1,0 +1,286 @@
+name: Common SonarCloud analysis workflow
+
+permissions:
+  contents: read
+
+concurrency:
+  group: common-sonarcloud-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') }}
+
+on:
+  workflow_call:
+    inputs:
+      configuration:
+        type: string
+        default: 'Release'
+        description: 'Build configuration'
+
+      dotnetVersions:
+        type: string
+        default: |
+          8.0.x
+          9.0.x
+          10.0.x
+          11.0.x
+        description: 'Newline-separated list of .NET SDKs'
+
+      productNamespacePrefix:
+        type: string
+        required: false
+        default: ''
+        description: 'Deprecated/unused: coverage filtering is driven by testconfig.json under MTP. Retained so existing callers can keep passing it.'
+
+      solutionFile:
+        type: string
+        description: 'Solution file relative to srcFolder'
+
+      srcFolder:
+        type: string
+        default: 'src'
+        description: 'Folder containing the solution'
+
+      performTests:
+        type: boolean
+        default: true
+        description: 'Run tests + collect coverage inside the Sonar scan'
+
+      minverMinimumMajorMinor:
+        type: string
+        default: ''
+        description: 'floor major.minor when no tag is reachable (e.g. "1.0").'
+
+      minverTagPrefix:
+        type: string
+        default: 'v'
+        description: 'git tag prefix MinVer expects.'
+
+      minverAutoIncrement:
+        type: string
+        default: 'minor'
+        description: 'auto-increment segment (major|minor|patch).'
+
+      minverDefaultPreReleaseIdentifiers:
+        type: string
+        default: 'alpha.0'
+        description: 'pre-release identifier(s) for height-only builds.'
+
+      sonarProjectKey:
+        type: string
+        required: true
+        description: 'SonarCloud project key (e.g. reactiveui_Foo).'
+
+      sonarOrganization:
+        type: string
+        required: true
+        description: 'SonarCloud organization slug (e.g. reactiveui).'
+
+      sonarHostUrl:
+        type: string
+        default: 'https://sonarcloud.io'
+        description: 'SonarCloud / SonarQube host URL.'
+
+      sonarExtraBeginArgs:
+        type: string
+        default: ''
+        description: 'Extra raw arguments appended to the dotnet-sonarscanner begin invocation.'
+
+      sonarExclusions:
+        type: string
+        default: ''
+        description: 'Comma-separated globs for sonar.exclusions (files Sonar fully ignores). Empty = flag omitted.'
+
+      sonarCoverageExclusions:
+        type: string
+        default: '**/*Tests/**,**/*Tests.cs,**/Generated/**'
+        description: 'Comma-separated globs for sonar.coverage.exclusions (files excluded from coverage). Empty = flag omitted.'
+
+      sonarCpdExclusions:
+        type: string
+        default: ''
+        description: 'Comma-separated globs for sonar.cpd.exclusions (files excluded from copy/paste detection). Empty = flag omitted.'
+
+      sonarTestExclusions:
+        type: string
+        default: ''
+        description: 'Comma-separated globs for sonar.test.exclusions (files Sonar will not treat as tests). Empty = flag omitted.'
+
+      installWorkloads:
+        type: boolean
+        default: false
+        description: 'If true, run workload restore'
+
+      installWindowsAppRuntime:
+        type: boolean
+        default: false
+        description: 'If true, install the Windows App SDK runtime on the runner (needed to run WinUI tests)'
+
+      windowsAppRuntimeVersion:
+        type: string
+        # renovate: datasource=nuget depName=Microsoft.WindowsAppSDK
+        default: '2.5'
+        description: 'Windows App SDK major.minor whose runtime to install when installWindowsAppRuntime is true'
+
+
+      enableDetailedTestLogging:
+        type: boolean
+        default: true
+        description: 'Enable MTP diagnostic logging (Trace-level .diag files, sync writes, --output Detailed). Default on for hang/crash debuggability.'
+
+      testTimeout:
+        type: string
+        default: ''
+        description: 'Optional global MTP test timeout (format [h|m|s], e.g. "5m"). Empty = no timeout.'
+      testProjects:
+        type: string
+        default: ''
+        description: 'Optional newline-separated globs, relative to the solution folder, choosing which projects to test (e.g. "tests/**/*.csproj"). A line starting with "!" excludes matches. Empty = every test project in the solution.'
+
+      runsOn:
+        type: string
+        default: 'windows-latest'
+        description: 'Runner the SonarCloud scan executes on. Defaults to windows-latest so Windows/Apple-targeting projects can build and analyse their platform-specific code; override (e.g. "ubuntu-latest") for Linux-only projects.'
+
+    secrets:
+      SONAR_TOKEN:
+        required: true
+        description: 'SonarCloud token.'
+
+jobs:
+  changes:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - name: Detect changed areas
+        id: changes
+        uses: reactiveui/actions-common/.github/actions/detect-changes@main
+
+  sonarcloud:
+    needs: changes
+    # Fork PRs get no SONAR_TOKEN, so they are skipped (a skipped job reports success). A change under .github
+    # alone is skipped too.
+    if: >-
+      !cancelled() && needs.changes.outputs.code != 'false' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ inputs.runsOn }}
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
+      # Composite actions cannot declare secret inputs, so the sonarcloud action reads this from env.
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        id: environment
+        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        with:
+          dotnet-versions: ${{ inputs.dotnetVersions }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          install-workloads: ${{ inputs.installWorkloads }}
+          minver-tag-prefix: ${{ inputs.minverTagPrefix }}
+          minver-minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
+          minver-auto-increment: ${{ inputs.minverAutoIncrement }}
+          minver-default-pre-release-identifiers: ${{ inputs.minverDefaultPreReleaseIdentifiers }}
+
+      - name: SonarCloud begin
+        uses: reactiveui/actions-common/.github/actions/sonarcloud@main
+        with:
+          mode: begin
+          project-key: ${{ inputs.sonarProjectKey }}
+          organization: ${{ inputs.sonarOrganization }}
+          host-url: ${{ inputs.sonarHostUrl }}
+          version: ${{ steps.environment.outputs.version-semver2 }}
+          extra-begin-args: ${{ inputs.sonarExtraBeginArgs }}
+          exclusions: ${{ inputs.sonarExclusions }}
+          coverage-exclusions: ${{ inputs.sonarCoverageExclusions }}
+          cpd-exclusions: ${{ inputs.sonarCpdExclusions }}
+          test-exclusions: ${{ inputs.sonarTestExclusions }}
+          working-directory: ${{ inputs.srcFolder }}
+
+      - name: Build
+        uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          create-packages: 'false'
+
+      # WinUI test hosts need the Windows App SDK runtime, an MSIX framework package neither workloads nor the image
+      # provide. Without it they run no tests and add no coverage.
+      - name: Install Windows App Runtime
+        if: inputs.installWindowsAppRuntime == true
+        shell: bash
+        env:
+          WINDOWS_APP_RUNTIME_VERSION: ${{ inputs.windowsAppRuntimeVersion }}
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - -- "$WINDOWS_APP_RUNTIME_VERSION" <<'CS'
+          #:property TargetFramework=net11.0-windows10.0.19041.0
+
+          using System.Diagnostics;
+          using System.Text.RegularExpressions;
+          using Windows.Management.Deployment;
+          using static System.Environment;
+
+          if (args is not [var version] || !Regex.IsMatch(version, @"^\d+\.\d+$"))
+          {
+              Console.WriteLine($"::error::windowsAppRuntimeVersion must be <major>.<minor>, got '{string.Join(' ', args)}'.");
+              return 1;
+          }
+
+          var installer = Path.Combine(GetEnvironmentVariable("RUNNER_TEMP")!, "windowsappruntimeinstall-x64.exe");
+          Console.WriteLine($"Downloading Windows App Runtime {version}");
+          using (var http = new HttpClient())
+          {
+              await File.WriteAllBytesAsync(installer, await http.GetByteArrayAsync($"https://aka.ms/windowsappsdk/{version}/latest/windowsappruntimeinstall-x64.exe"));
+          }
+
+          // 0x80073D06: a newer runtime is already installed.
+          if (Process.Run(installer, ["--quiet"]) is { ExitCode: not (0 or unchecked((int)0x80073D06)) } install)
+          {
+              Console.WriteLine($"::error::Windows App Runtime install failed with exit code {install.ExitCode}.");
+              return 1;
+          }
+
+          string[] runtimes =
+          [
+              .. new PackageManager().FindPackagesForUser(string.Empty)
+                  .Select(package => package.Id.Name)
+                  .Where(name => name.StartsWith("Microsoft.WindowsAppRuntime", StringComparison.Ordinal))
+                  .Distinct(),
+          ];
+
+          if (runtimes is [])
+          {
+              Console.WriteLine("::error::Windows App Runtime install reported success but no runtime package is registered.");
+              return 1;
+          }
+
+          Console.WriteLine($"Registered runtimes: {string.Join(", ", runtimes)}");
+          return 0;
+          CS
+
+      - name: Test
+        if: inputs.performTests == true
+        uses: reactiveui/actions-common/.github/actions/dotnet-test@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          enable-detailed-test-logging: ${{ inputs.enableDetailedTestLogging }}
+          test-timeout: ${{ inputs.testTimeout }}
+          test-projects: ${{ inputs.testProjects }}
+
+      - name: SonarCloud end
+        # A failed build or test still uploads partial analysis.
+        if: always()
+        uses: reactiveui/actions-common/.github/actions/sonarcloud@main
+        with:
+          mode: end
+          project-key: ${{ inputs.sonarProjectKey }}
+          working-directory: ${{ inputs.srcFolder }}

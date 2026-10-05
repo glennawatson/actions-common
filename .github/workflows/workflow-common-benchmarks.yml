@@ -1,0 +1,317 @@
+name: Common benchmarks workflow
+
+permissions:
+  contents: read
+
+concurrency:
+  group: common-benchmarks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+on:
+  workflow_call:
+    inputs:
+      projects:
+        type: string
+        required: true
+        description: 'Newline-separated list of benchmark projects (.csproj) to run, relative to srcFolder. Blank lines are skipped, so a caller can build the list from a suite choice.'
+
+      revision:
+        type: string
+        default: ''
+        description: 'Commit to check out and measure. Empty measures the commit that triggered the run.'
+
+      filter:
+        type: string
+        default: '*'
+        description: 'BenchmarkDotNet filter, passed through as --filter.'
+
+      runsOn:
+        type: string
+        default: 'windows-latest'
+        description: 'Runner to measure on. Windows by default: it is the only host that can launch a .NET Framework job, and its image carries the C++ toolchain the NativeAOT jobs link with.'
+
+      configuration:
+        type: string
+        default: 'Release'
+        description: 'Build configuration. Release is the only one worth measuring; a Debug build measures the absence of the optimiser.'
+
+      hostFramework:
+        type: string
+        default: 'net10.0'
+        description: 'Target framework the host process launches under. It only runs the switcher - which runtimes are measured comes from the job attributes on each benchmark class.'
+
+      dotnetVersions:
+        type: string
+        default: |
+          8.0.x
+          9.0.x
+          10.0.x
+          11.0.x
+        description: 'Newline-separated list of .NET SDKs to install. It must cover every runtime the benchmark classes declare a job for, not just the host.'
+
+      srcFolder:
+        type: string
+        default: 'src'
+        description: 'Folder holding the solution and the benchmark projects.'
+
+      solutionFile:
+        type: string
+        default: ''
+        description: 'Solution to restore and build before measuring, relative to srcFolder. Empty skips it, leaving each benchmark run to build what it needs.'
+
+      installWorkloads:
+        type: boolean
+        default: false
+        description: 'Run workload restore during environment setup. Needed when the solution carries a project that requires one, such as a MAUI head.'
+
+      buildOutputPath:
+        type: string
+        default: ''
+        description: 'Output root for the measured build. Empty picks one per host: a drive-root path on Windows, and nothing elsewhere. BenchmarkDotNet generates a project per job beside the built assembly and the NativeAOT build writes below that again, which on Windows puts the linker path past 260 characters from an ordinary checkout - the NativeAOT jobs then report NA while the run still exits zero.'
+
+      exporters:
+        type: string
+        default: 'github json html csv'
+        description: 'Space-separated BenchmarkDotNet exporters. The github markdown one is what the run summary is built from.'
+
+      raisePriority:
+        type: boolean
+        default: true
+        description: 'Raise the priority of the measured processes. A hosted runner is a shared virtual machine, so this removes the scheduling noise that is ours to remove; the figures remain trend and regression evidence rather than absolutes.'
+
+      artifactName:
+        type: string
+        default: 'benchmark-reports'
+        description: 'Name of the artifact the full reports are uploaded under.'
+
+      retentionDays:
+        type: number
+        default: 30
+        description: 'How long to keep the uploaded reports.'
+
+      summaryBudgetKb:
+        type: number
+        default: 900
+        description: 'How much of the run summary to fill with report tables. A step summary is dropped whole once it passes 1 MiB, so the tables stop being appended before that and the artifact carries the rest.'
+
+      timeoutMinutes:
+        type: number
+        default: 360
+        description: 'Job timeout. A whole suite across several runtimes takes hours.'
+
+jobs:
+  benchmark:
+    runs-on: ${{ inputs.runsOn }}
+    timeout-minutes: ${{ inputs.timeoutMinutes }}
+
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
+
+      # Every build-server connect attempt waits out a timeout, and a lingering server competes with the measurement.
+      DOTNET_CLI_USE_MSBUILD_SERVER: 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        uses: reactiveui/actions-common/.github/actions/dotnet-environment@main
+        with:
+          dotnet-versions: ${{ inputs.dotnetVersions }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          install-workloads: ${{ inputs.installWorkloads }}
+
+      - name: Build solution
+        if: inputs.solutionFile != ''
+        uses: reactiveui/actions-common/.github/actions/dotnet-build@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+
+      - name: Run benchmarks
+        shell: bash
+        env:
+          PROJECTS: ${{ inputs.projects }}
+          SRC_FOLDER: ${{ inputs.srcFolder }}
+          FILTER: ${{ inputs.filter }}
+          CONFIGURATION: ${{ inputs.configuration }}
+          HOST_FRAMEWORK: ${{ inputs.hostFramework }}
+          EXPORTERS: ${{ inputs.exporters }}
+          BUILD_OUTPUT_PATH: ${{ inputs.buildOutputPath }}
+          RAISE_PRIORITY: ${{ inputs.raisePriority }}
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - -- "$PROJECTS" "$SRC_FOLDER" "$FILTER" "$CONFIGURATION" "$HOST_FRAMEWORK" "$EXPORTERS" "$BUILD_OUTPUT_PATH" "$RAISE_PRIORITY" <<'CS'
+          using System.Diagnostics;
+          using static System.Environment;
+
+          if (args is not [var projects, var srcFolder, var filter, var configuration, var hostFramework, var exporters, var buildOutputPath, var raisePriority])
+          {
+              Console.WriteLine("::error::Expected the eight benchmark run arguments.");
+              return 2;
+          }
+
+          var workspace = GetEnvironmentVariable("GITHUB_WORKSPACE")!;
+
+          // An empty build output path picks a drive root on Windows, where the NativeAOT build otherwise passes 260 characters.
+          string[] artifactsPath = (buildOutputPath, OperatingSystem.IsWindows()) switch
+          {
+              (not "", _) => ["--artifacts-path", buildOutputPath],
+              (_, true) => ["--artifacts-path", @"C:\a"],
+              _ => [],
+          };
+
+          if (raisePriority is "true")
+          {
+              RaisePriority();
+          }
+
+          Directory.SetCurrentDirectory(Path.Combine(workspace, srcFolder));
+
+          foreach (var project in projects.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+          {
+              var name = Path.GetFileNameWithoutExtension(project);
+              Console.WriteLine($"::group::{name}");
+
+              var status = Process.Run(
+                  "dotnet",
+                  [
+                      "run", "--project", project, "-c", configuration, "-f", hostFramework, .. artifactsPath, "--",
+                      "--filter", filter, "--artifacts", Path.Combine(workspace, "benchmark-artifacts", name),
+                      "--exporters", .. exporters.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                  ]);
+
+              Console.WriteLine("::endgroup::");
+              if (status is { ExitCode: not 0 })
+              {
+                  Console.WriteLine($"::error::{name} exited with {status.ExitCode}");
+                  return status.ExitCode;
+              }
+          }
+
+          return 0;
+
+          // Processes started from here inherit the priority on Unix; on Windows BenchmarkDotNet raises its own benchmark processes.
+          static void RaisePriority()
+          {
+              try
+              {
+                  using var current = Process.GetCurrentProcess();
+                  current.PriorityClass = ProcessPriorityClass.High;
+              }
+              catch (Exception ex)
+              {
+                  Console.WriteLine($"::warning::Could not raise the benchmark priority: {ex.Message}");
+              }
+          }
+          CS
+
+      - name: Validate benchmark reports
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - <<'CS'
+          using static System.Environment;
+
+          var root = Path.Combine(GetEnvironmentVariable("GITHUB_WORKSPACE")!, "benchmark-artifacts");
+
+          // BenchmarkDotNet exits zero on a validation error, so the exported reports are the evidence it ran.
+          string[] reports = Directory.Exists(root) ? Directory.GetFiles(root, "*-report-github.md", SearchOption.AllDirectories) : [];
+          if (reports is [])
+          {
+              Console.WriteLine("::error::No benchmark reports were produced. Check the validation errors above.");
+              return 1;
+          }
+
+          // A job whose build fails still exports its rows, with every measurement as NA.
+          var unmeasured = reports
+              .Select(report => (Name: Path.GetFileName(report).Replace("-report-github.md", string.Empty), Rows: File.ReadLines(report).Count(line => line.StartsWith('|') && line.Split('|').Any(cell => cell.Trim() == "NA"))))
+              .Where(report => report.Rows > 0)
+              .Select(report => $"{report.Name} ({report.Rows} rows)")
+              .ToArray();
+
+          if (unmeasured is not [])
+          {
+              Console.WriteLine($"::error::These benchmarks measured nothing: {string.Join("; ", unmeasured)}");
+              return 1;
+          }
+
+          return 0;
+          CS
+
+      - name: Publish results to run summary
+        if: always()
+        shell: bash
+        env:
+          FILTER: ${{ inputs.filter }}
+          BUDGET_KB: ${{ inputs.summaryBudgetKb }}
+          ARTIFACT_NAME: ${{ inputs.artifactName }}
+        run: |
+          cd "$RUNNER_TEMP" && dotnet run - -- "$FILTER" "$BUDGET_KB" "$ARTIFACT_NAME" <<'CS'
+          using static System.Environment;
+
+          if (args is not [var filter, var budgetKb, var artifactName])
+          {
+              Console.WriteLine("::error::Expected the filter, summary budget and artifact name arguments.");
+              return;
+          }
+
+          var budget = long.Parse(budgetKb) * 1024;
+
+          var summary = GetEnvironmentVariable("GITHUB_STEP_SUMMARY")!;
+          var root = Path.Combine(GetEnvironmentVariable("GITHUB_WORKSPACE")!, "benchmark-artifacts");
+
+          // With a revision input the triggering commit is not the measured one, so the checked-out commit MinVer read comes first.
+          var commit = GetEnvironmentVariable("MINVER_GitCommitId") ?? GetEnvironmentVariable("GITHUB_SHA");
+
+          File.AppendAllLines(
+              summary,
+              [
+                  "# Benchmark results",
+                  "",
+                  $"Filter `{filter}`, commit `{commit}`, measured on `{GetEnvironmentVariable("RUNNER_OS")}`.",
+                  "",
+                  "Each section is one benchmark class. The runtimes measured are whichever jobs that class",
+                  "declares, so a class with no NativeAOT row cannot run ahead-of-time at all. A hosted runner",
+                  "is shared, so read these for trend and regression rather than as absolute figures.",
+                  $"Full JSON, HTML and CSV exports are attached to this run as `{artifactName}`.",
+                  "",
+              ]);
+
+          string[] reports = Directory.Exists(root) ? [.. Directory.GetFiles(root, "*-report-github.md", SearchOption.AllDirectories).Order(StringComparer.Ordinal)] : [];
+          if (reports is [])
+          {
+              File.AppendAllLines(summary, ["No benchmark reports were exported."]);
+              return;
+          }
+
+          List<string> skipped = [];
+          foreach (var report in reports)
+          {
+              var title = Path.GetFileName(report).Replace("-report-github.md", string.Empty);
+              if (new FileInfo(summary).Length + new FileInfo(report).Length > budget)
+              {
+                  skipped.Add(title);
+                  continue;
+              }
+
+              File.AppendAllLines(summary, [$"<details><summary>{title}</summary>", "", .. File.ReadLines(report), "", "</details>", ""]);
+          }
+
+          if (skipped is not [])
+          {
+              File.AppendAllLines(summary, ["", $"Omitted here to stay inside the summary limit: {string.Join(", ", skipped)}. Read them in the {artifactName} artifact.", ""]);
+          }
+          CS
+
+      - name: Upload benchmark reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.artifactName }}
+          path: benchmark-artifacts/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retentionDays }}
