@@ -1,0 +1,20 @@
+name: Zip build
+description: Zip a folder, with the folder as the top-level entry, on any runner.
+
+inputs:
+  source:
+    description: 'Folder to zip.'
+    required: true
+  output:
+    description: 'Path of the .zip to write.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Zip the folder
+      shell: bash
+      env:
+        ZIP_SOURCE: ${{ inputs.source }}
+        ZIP_OUTPUT: ${{ inputs.output }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/zip-build.cs" -- "$ZIP_SOURCE" "$ZIP_OUTPUT"
