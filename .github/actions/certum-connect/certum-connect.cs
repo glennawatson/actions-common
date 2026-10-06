@@ -8,6 +8,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Web;
 using Net.Pkcs11Interop.Common;
@@ -232,6 +233,11 @@ internal static partial class Program
     /// <remarks>The slot only enumerates once the cloud session is up. It cannot show the certificate: this token lists none even when signing works.</remarks>
     internal static async Task<int> WaitForTokenAsync(string module, CancellationToken cancellationToken)
     {
+        // Pkcs11Interop imports dlopen from "libdl"; glibc 2.34 and later only ship that name in its development package.
+        NativeLibrary.SetDllImportResolver(
+            typeof(Pkcs11InteropFactories).Assembly,
+            static (name, _, _) => string.Equals(name, "libdl", StringComparison.Ordinal) ? NativeLibrary.Load("libdl.so.2") : 0);
+
         var factories = new Pkcs11InteropFactories();
         using var library = factories.Pkcs11LibraryFactory.LoadPkcs11Library(factories, module, AppType.MultiThreaded);
         var slots = await PollAsync(

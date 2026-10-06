@@ -7,6 +7,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Net.Pkcs11Interop.Common;
@@ -34,6 +35,11 @@ if (packages is [])
     Console.WriteLine($"::error::no packages matched: {packagesGlob}");
     return 1;
 }
+
+// Pkcs11Interop imports dlopen from "libdl"; glibc 2.34 and later only ship that name in its development package.
+NativeLibrary.SetDllImportResolver(
+    typeof(Pkcs11InteropFactories).Assembly,
+    static (name, _, _) => string.Equals(name, "libdl", StringComparison.Ordinal) ? NativeLibrary.Load("libdl.so.2") : 0);
 
 var factories = new Pkcs11InteropFactories();
 
