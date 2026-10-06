@@ -1,27 +1,74 @@
-name: Certum jsign signing
-description: Sign files with jsign and the Certum token. Run certum-connect earlier in the job.
+name: Certum signing
+description: Sign in to the Certum token once per job and sign the given files. Run in the certum-signer image with CERTUM_USER_ID and CERTUM_OTP_URI set.
 
 inputs:
-  packages-glob:
-    description: 'Glob of files to sign (relative to the working directory).'
+  authenticode:
+    description: 'Glob of Windows files to sign with jsign (.exe, .dll, .msi, .msix).'
     required: false
-    default: 'signed/*.nupkg'
-  target-type:
-    description: 'What the files are: nuget (signed, then checked with dotnet nuget verify) or authenticode (Windows executables and installers, signed only).'
+    default: ''
+  nuget:
+    description: 'Glob of .nupkg files to sign with jsign and check with dotnet nuget verify.'
     required: false
-    default: 'nuget'
+    default: ''
+  rpm:
+    description: 'Glob of .rpm files to give IMA file signatures.'
+    required: false
+    default: ''
+  checksums:
+    description: 'Glob of release files; SHA256SUMS and a signed SHA256SUMS.p7s are written beside them. Runs last.'
+    required: false
+    default: ''
+  certificate-from:
+    description: 'A file already signed with this certificate (.exe, .dll, .msi or .msix), read for the checksums signature.'
+    required: false
+    default: ''
   timestamp-url:
     description: 'RFC3161 timestamp authority URL.'
     required: false
     default: 'http://time.certum.pl'
+  launch-seconds:
+    description: 'Most seconds to wait for SimplySign to show its login window.'
+    required: false
+    default: '90'
 
 runs:
   using: composite
   steps:
-    - name: Sign packages with jsign + verify
+    # certum-connect exports SS_PKCS11, so a second use in the same job reuses the session.
+    - name: Sign in to SimplySign
+      if: env.SS_PKCS11 == ''
+      shell: bash
+      env:
+        LAUNCH_SECONDS: ${{ inputs.launch-seconds }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-connect.cs" -- "$LAUNCH_SECONDS"
+
+    - name: Sign Windows files
+      if: inputs.authenticode != ''
       shell: bash
       env:
         TS_URL: ${{ inputs.timestamp-url }}
-        PKG_GLOB: ${{ inputs.packages-glob }}
-        TARGET_TYPE: ${{ inputs.target-type }}
-      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-sign.cs" -- "$TS_URL" "$PKG_GLOB" "$TARGET_TYPE"
+        FILES: ${{ inputs.authenticode }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-sign.cs" -- "$TS_URL" "$FILES" authenticode
+
+    - name: Sign NuGet packages
+      if: inputs.nuget != ''
+      shell: bash
+      env:
+        TS_URL: ${{ inputs.timestamp-url }}
+        FILES: ${{ inputs.nuget }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-sign.cs" -- "$TS_URL" "$FILES" nuget
+
+    - name: Sign RPM files
+      if: inputs.rpm != ''
+      shell: bash
+      env:
+        FILES: ${{ inputs.rpm }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-rpm-sign.cs" -- "$FILES"
+
+    - name: Write and sign SHA256SUMS
+      if: inputs.checksums != ''
+      shell: bash
+      env:
+        FILES: ${{ inputs.checksums }}
+        CERTIFICATE_FROM: ${{ inputs.certificate-from }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-checksums-sign.cs" -- "$FILES" "$CERTIFICATE_FROM"

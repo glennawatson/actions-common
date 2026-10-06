@@ -253,13 +253,10 @@ jobs:
           name: unsigned-nuget
           path: signed
 
-      - name: Sign in to Certum SimplySign
-        uses: glennawatson/actions-common/.github/actions/certum-connect@main
-
       - name: Sign packages with Certum SimplySign (prebuilt image)
         uses: glennawatson/actions-common/.github/actions/certum-sign@main
         with:
-          packages-glob: 'signed/*.nupkg'
+          nuget: 'signed/*.nupkg'
           timestamp-url: ${{ inputs.signingTimestampUrl }}
 
       - name: Upload Signed Packages
