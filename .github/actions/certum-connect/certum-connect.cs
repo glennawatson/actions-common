@@ -116,6 +116,18 @@ internal static partial class Program
     /// <summary>The longest wait for the token's slot once the dialog is closed.</summary>
     private static readonly TimeSpan TokenTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>How long the login form needs after its window maps before it takes input.</summary>
+    private static readonly TimeSpan FormReadyDelay = TimeSpan.FromSeconds(12);
+
+    /// <summary>How long the form needs to act on a click or key before the next one.</summary>
+    private static readonly TimeSpan InputSettleDelay = TimeSpan.FromSeconds(1);
+
+    /// <summary>How long the cloud login takes before the success dialog is drawn.</summary>
+    private static readonly TimeSpan CloudLoginDelay = TimeSpan.FromSeconds(8);
+
+    /// <summary>How long SimplySign needs after the dialog closes to open the cloud token.</summary>
+    private static readonly TimeSpan CloseSettleDelay = TimeSpan.FromSeconds(3);
+
     /// <summary>Starts Xvfb, then fluxbox once the display answers, then waits for fluxbox to manage it.</summary>
     /// <param name="cancellationToken">Stops the wait.</param>
     /// <returns>True when the display and window manager are up.</returns>
@@ -208,21 +220,31 @@ internal static partial class Program
         var otp = Totp(otpUri, TimeProvider.System);
         Console.WriteLine($"::add-mask::{otp}");
 
+        // SimplySign maps its window before the form takes input, and exposes no signal for when it does.
+        await Task.Delay(FormReadyDelay, cancellationToken).ConfigureAwait(false);
         await ActivateAsync(window, cancellationToken).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "windowraise", window.Id).ConfigureAwait(false);
+        await Task.Delay(InputSettleDelay, cancellationToken).ConfigureAwait(false);
 
         // Click E-MAIL field, type id; Tab; type OTP; click Login.
         await ClickAsync(window, EmailFieldPercent, cancellationToken).ConfigureAwait(false);
         await WaitForFocusAsync(window, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(InputSettleDelay, cancellationToken).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "type", "--clearmodifiers", "--delay", TypingDelay, userId).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "key", "Tab").ConfigureAwait(false);
+        await Task.Delay(InputSettleDelay, cancellationToken).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "type", "--clearmodifiers", "--delay", TypingDelay, otp).ConfigureAwait(false);
         await ClickAsync(window, LoginButtonPercent, cancellationToken).ConfigureAwait(false);
 
-        // The token only activates once the "Logon successful" dialog's Close button (bottom-centre) is clicked.
-        var dialog = await PollAsync(token => OtherWindowAsync(window, token), DialogTimeout, cancellationToken).ConfigureAwait(false) ?? window;
+        // The cloud login runs before the "Logon successful" dialog is drawn; the dialog's window can be the login
+        // window itself, so there is no new window to wait for.
+        await Task.Delay(CloudLoginDelay, cancellationToken).ConfigureAwait(false);
+
+        // The token only activates once the dialog's Close button (bottom-centre) is clicked.
+        var dialog = await LargestWindowAsync(cancellationToken).ConfigureAwait(false) ?? window;
         await ActivateAsync(dialog, cancellationToken).ConfigureAwait(false);
         await ClickAsync(dialog, CloseButtonPercent, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(CloseSettleDelay, cancellationToken).ConfigureAwait(false);
         return true;
     }
 
@@ -238,12 +260,9 @@ internal static partial class Program
             typeof(Pkcs11InteropFactories).Assembly,
             static (name, _, _) => string.Equals(name, "libdl", StringComparison.Ordinal) ? NativeLibrary.Load("libdl.so.2") : 0);
 
-        var factories = new Pkcs11InteropFactories();
-        using var library = factories.Pkcs11LibraryFactory.LoadPkcs11Library(factories, module, AppType.MultiThreaded);
-        var slots = await PollAsync(
-            token => Task.FromResult(library.GetSlotList(SlotsType.WithTokenPresent) is { Count: > 0 } present ? present : null),
-            TokenTimeout,
-            cancellationToken).ConfigureAwait(false);
+        // Each attempt initialises the module afresh, as a separate tool would; a module initialised before the cloud
+        // session is up may keep reporting no token.
+        var slots = await PollAsync(_ => Task.FromResult(ListTokens(module)), TokenTimeout, cancellationToken).ConfigureAwait(false);
         if (slots is null)
         {
             Console.WriteLine("::error::the PKCS#11 module lists no token; the login did not complete");
@@ -252,7 +271,7 @@ internal static partial class Program
 
         foreach (var slot in slots)
         {
-            Console.WriteLine($"slot {slot.SlotId}: {slot.GetSlotInfo().SlotDescription.Trim()}, token {slot.GetTokenInfo().Label.Trim()}");
+            Console.WriteLine(slot);
         }
 
         return 0;
@@ -376,12 +395,27 @@ internal static partial class Program
     private static async Task<Window?> LoginWindowAsync(CancellationToken cancellationToken) =>
         await LargestWindowAsync(cancellationToken).ConfigureAwait(false) is { Width: >= LoginWidth, Height: >= LoginHeight } found ? found : null;
 
-    /// <summary>Finds the largest SimplySign window when it is not the given one.</summary>
-    /// <param name="window">The window to look past.</param>
-    /// <param name="cancellationToken">Stops the search.</param>
-    /// <returns>The other window, or null when there is none yet.</returns>
-    private static async Task<Window?> OtherWindowAsync(Window window, CancellationToken cancellationToken) =>
-        await LargestWindowAsync(cancellationToken).ConfigureAwait(false) is { } found && !string.Equals(found.Id, window.Id, StringComparison.Ordinal) ? found : null;
+    /// <summary>Loads the PKCS#11 module and describes each slot that holds a token.</summary>
+    /// <param name="module">The PKCS#11 module.</param>
+    /// <returns>One line per token, or null when there is none.</returns>
+    private static List<string>? ListTokens(string module)
+    {
+        var factories = new Pkcs11InteropFactories();
+        using var library = factories.Pkcs11LibraryFactory.LoadPkcs11Library(factories, module, AppType.MultiThreaded);
+        var slots = library.GetSlotList(SlotsType.WithTokenPresent);
+        if (slots.Count == 0)
+        {
+            return null;
+        }
+
+        var tokens = new List<string>(slots.Count);
+        foreach (var slot in slots)
+        {
+            tokens.Add($"slot {slot.SlotId}: {slot.GetSlotInfo().SlotDescription.Trim()}, token {slot.GetTokenInfo().Label.Trim()}");
+        }
+
+        return tokens;
+    }
 
     /// <summary>Finds the largest SimplySign window.</summary>
     /// <param name="cancellationToken">Stops the search.</param>
