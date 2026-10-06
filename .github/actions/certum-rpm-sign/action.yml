@@ -1,24 +1,15 @@
 name: Certum RPM signing
-description: Add IMA file signatures to RPMs with the Certum token. Run in the certum-signer image with CERTUM_USER_ID and CERTUM_OTP_URI set.
+description: Add IMA file signatures to RPMs with the Certum token. Run certum-connect earlier in the job.
 
 inputs:
   packages-glob:
     description: 'Glob of .rpm files to sign (relative to the working directory).'
     required: false
     default: 'signed/*.rpm'
-  launch-seconds:
-    description: 'Most seconds to wait for SimplySign to show its login window.'
-    required: false
-    default: '90'
 
 runs:
   using: composite
   steps:
-    - name: Connect SimplySign
-      uses: glennawatson/actions-common/.github/actions/certum-connect@main
-      with:
-        launch-seconds: ${{ inputs.launch-seconds }}
-
     - name: Sign RPM files with the token
       shell: bash
       env:

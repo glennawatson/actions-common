@@ -1,5 +1,5 @@
 name: Certum checksums signing
-description: Write SHA256SUMS for release files and sign it with the Certum token as SHA256SUMS.p7s. Run in the certum-signer image.
+description: Write SHA256SUMS for release files and sign it with the Certum token as SHA256SUMS.p7s. Run certum-connect earlier in the job.
 
 inputs:
   files-glob:
@@ -8,19 +8,10 @@ inputs:
   certificate-from:
     description: 'A file jsign signed with the same certificate (.exe, .dll, .msi or .msix); the certificate is read from it.'
     required: true
-  launch-seconds:
-    description: 'Most seconds to wait for SimplySign to show its login window.'
-    required: false
-    default: '90'
 
 runs:
   using: composite
   steps:
-    - name: Connect SimplySign
-      uses: glennawatson/actions-common/.github/actions/certum-connect@main
-      with:
-        launch-seconds: ${{ inputs.launch-seconds }}
-
     - name: Write and sign SHA256SUMS
       shell: bash
       env:
