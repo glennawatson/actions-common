@@ -107,6 +107,9 @@ internal static partial class Program
     /// <summary>The Sign In button, as a percentage of the login window width; it sits at the right.</summary>
     private const int SignInButtonAcrossPercent = 90;
 
+    /// <summary>The Close button of the "Logon successful" dialog, as a percentage of its height.</summary>
+    private const int CloseButtonPercent = 94;
+
     /// <summary>The horizontal centre, as a percentage of the window width.</summary>
     private const int CentrePercent = 50;
 
@@ -136,9 +139,6 @@ internal static partial class Program
 
     /// <summary>How long the cloud login takes before the success dialog is drawn.</summary>
     private static readonly TimeSpan CloudLoginDelay = TimeSpan.FromSeconds(8);
-
-    /// <summary>How often the screen is snapshotted while the cloud login runs.</summary>
-    private static readonly TimeSpan SignInSnapshotInterval = TimeSpan.FromSeconds(3);
 
     /// <summary>How long SimplySign needs after the dialog closes to open the cloud token.</summary>
     private static readonly TimeSpan CloseSettleDelay = TimeSpan.FromSeconds(3);
@@ -313,17 +313,15 @@ internal static partial class Program
         await SnapshotAsync("code-typed", cancellationToken).ConfigureAwait(false);
         await ClickAsync(window, SignInButtonAcrossPercent, SignInButtonPercent, cancellationToken).ConfigureAwait(false);
 
-        // The cloud login runs before the success dialog is drawn; these show how it looks and when it appears.
-        for (var waited = TimeSpan.Zero; waited < CloudLoginDelay; waited += SignInSnapshotInterval)
-        {
-            await Task.Delay(SignInSnapshotInterval, cancellationToken).ConfigureAwait(false);
-            await SnapshotAsync("after-sign-in", cancellationToken).ConfigureAwait(false);
-        }
+        // The cloud login runs before the "Logon successful" dialog is drawn; the dialog's window can be the login
+        // window itself, so there is no new window to wait for.
+        await Task.Delay(CloudLoginDelay, cancellationToken).ConfigureAwait(false);
+        await SnapshotAsync("after-sign-in", cancellationToken).ConfigureAwait(false);
 
-        // Return presses the success dialog's default button, wherever the new layout puts it.
+        // The token only activates once the dialog's Close button (bottom-centre) is clicked.
         var dialog = await LargestWindowAsync(cancellationToken).ConfigureAwait(false) ?? window;
         await ActivateAsync(dialog, cancellationToken).ConfigureAwait(false);
-        _ = await XDoToolAsync(cancellationToken, "key", "Return").ConfigureAwait(false);
+        await ClickAsync(dialog, CentrePercent, CloseButtonPercent, cancellationToken).ConfigureAwait(false);
         await Task.Delay(CloseSettleDelay, cancellationToken).ConfigureAwait(false);
         await SnapshotAsync("closed", cancellationToken).ConfigureAwait(false);
         return true;
