@@ -74,6 +74,12 @@ internal static partial class Program
     /// <summary>The environment variable that selects the X display.</summary>
     private const string DisplayVariable = "DISPLAY";
 
+    /// <summary>The environment variable naming the runner's temporary folder.</summary>
+    private const string RunnerTemp = "RUNNER_TEMP";
+
+    /// <summary>The SimplySign log's file name.</summary>
+    private const string SimplySignLog = "simplysign.log";
+
     /// <summary>The X automation tool that finds, focuses and clicks SimplySign's windows.</summary>
     private const string XDoTool = "xdotool";
 
@@ -128,15 +134,69 @@ internal static partial class Program
     /// <summary>How long SimplySign needs after the dialog closes to open the cloud token.</summary>
     private static readonly TimeSpan CloseSettleDelay = TimeSpan.FromSeconds(3);
 
+    /// <summary>Where snapshots of the screen and windows go, or null when snapshots are off.</summary>
+    private static readonly string? SnapshotFolder = GetEnvironmentVariable("CERTUM_SNAPSHOT_DIR") is { Length: > 0 } folder ? folder : null;
+
+    /// <summary>Where Xvfb keeps its screen file while snapshots are on.</summary>
+    private static readonly string FrameBufferFolder = Path.Combine(GetEnvironmentVariable(RunnerTemp) ?? Path.GetTempPath(), "xvfb-screen");
+
+    /// <summary>The number of the next snapshot, so they sort in the order taken.</summary>
+    private static int _snapshot;
+
+    /// <summary>Copies the screen, the SimplySign windows and the SimplySign log into the snapshot folder, when snapshots are on.</summary>
+    /// <param name="name">What the snapshot shows.</param>
+    /// <param name="cancellationToken">Stops xdotool.</param>
+    /// <returns>A task that completes when the snapshot is written.</returns>
+    internal static async Task SnapshotAsync(string name, CancellationToken cancellationToken)
+    {
+        if (SnapshotFolder is null)
+        {
+            return;
+        }
+
+        _ = Directory.CreateDirectory(SnapshotFolder);
+        var prefix = Path.Combine(SnapshotFolder, $"{_snapshot:D2}-{name}");
+        _snapshot++;
+        if (Path.Combine(FrameBufferFolder, "Xvfb_screen0") is var screen && File.Exists(screen))
+        {
+            File.Copy(screen, $"{prefix}.xwd", overwrite: true);
+        }
+
+        List<string> windows = [];
+        foreach (var id in Lines(await CaptureAsync(cancellationToken, "search", "--name", string.Empty).ConfigureAwait(false)))
+        {
+            var title = (await CaptureAsync(cancellationToken, "getwindowname", id).ConfigureAwait(false)).StandardOutput.Trim();
+            var size = Geometry(id, await CaptureAsync(cancellationToken, "getwindowgeometry", "--shell", id).ConfigureAwait(false));
+            windows.Add($"{id}\t{size.X},{size.Y}\t{size.Width}x{size.Height}\t{title}");
+        }
+
+        var active = (await CaptureAsync(cancellationToken, "getactivewindow").ConfigureAwait(false)).StandardOutput.Trim();
+        await File.WriteAllLinesAsync($"{prefix}.txt", [$"active {active}", .. windows], cancellationToken).ConfigureAwait(false);
+        if (Path.Combine(GetEnvironmentVariable(RunnerTemp) ?? Path.GetTempPath(), SimplySignLog) is var log && File.Exists(log))
+        {
+            File.Copy(log, Path.Combine(SnapshotFolder, SimplySignLog), overwrite: true);
+        }
+
+        Console.WriteLine($"snapshot {Path.GetFileName(prefix)}");
+    }
+
     /// <summary>Starts Xvfb, then fluxbox once the display answers, then waits for fluxbox to manage it.</summary>
     /// <param name="cancellationToken">Stops the wait.</param>
     /// <returns>True when the display and window manager are up.</returns>
     internal static async Task<bool> StartDisplayAsync(CancellationToken cancellationToken)
     {
-        var temp = GetEnvironmentVariable("RUNNER_TEMP")!;
+        var temp = GetEnvironmentVariable(RunnerTemp)!;
         var home = GetFolderPath(SpecialFolder.UserProfile);
 
-        StartInBackground(new("Xvfb", [Display, "-screen", "0", "1280x1024x24"]), Path.Combine(temp, "xvfb.log"));
+        // With snapshots on, Xvfb keeps the screen in an XWD file that a snapshot copies.
+        string[] xvfb = [Display, "-screen", "0", "1280x1024x24"];
+        if (SnapshotFolder is not null)
+        {
+            _ = Directory.CreateDirectory(FrameBufferFolder);
+            xvfb = [.. xvfb, "-fbdir", FrameBufferFolder];
+        }
+
+        StartInBackground(new("Xvfb", xvfb), Path.Combine(temp, "xvfb.log"));
         if (await PollAsync(static token => Succeeded(OnDisplay("xdpyinfo"), token), DisplayTimeout, cancellationToken).ConfigureAwait(false) is null)
         {
             return false;
@@ -196,7 +256,7 @@ internal static partial class Program
         // SimplySignDesktop segfaults before drawing the login window when $USER is unset, as it is in containers.
         launch.Environment["USER"] = GetEnvironmentVariable("USER") is { Length: > 0 } user ? user : "root";
         launch.Environment["LD_LIBRARY_PATH"] = $"{dist}:{GetEnvironmentVariable("LD_LIBRARY_PATH")}";
-        var log = Path.Combine(GetEnvironmentVariable("RUNNER_TEMP")!, "simplysign.log");
+        var log = Path.Combine(GetEnvironmentVariable(RunnerTemp)!, SimplySignLog);
         StartInBackground(launch, log);
         return log;
     }
@@ -211,10 +271,12 @@ internal static partial class Program
     {
         if (await PollAsync(LoginWindowAsync, launchTimeout, cancellationToken).ConfigureAwait(false) is not { } window)
         {
+            await SnapshotAsync("no-login-window", cancellationToken).ConfigureAwait(false);
             return false;
         }
 
         Console.WriteLine($"login window {window.Id} {window.Width}x{window.Height}");
+        await SnapshotAsync("window-mapped", cancellationToken).ConfigureAwait(false);
 
         // The code is made once the window is up, so it is fresh when typed.
         var otp = Totp(otpUri, TimeProvider.System);
@@ -222,6 +284,7 @@ internal static partial class Program
 
         // SimplySign maps its window before the form takes input, and exposes no signal for when it does.
         await Task.Delay(FormReadyDelay, cancellationToken).ConfigureAwait(false);
+        await SnapshotAsync("form-ready", cancellationToken).ConfigureAwait(false);
         await ActivateAsync(window, cancellationToken).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "windowraise", window.Id).ConfigureAwait(false);
         await Task.Delay(InputSettleDelay, cancellationToken).ConfigureAwait(false);
@@ -230,21 +293,28 @@ internal static partial class Program
         await ClickAsync(window, EmailFieldPercent, cancellationToken).ConfigureAwait(false);
         await WaitForFocusAsync(window, cancellationToken).ConfigureAwait(false);
         await Task.Delay(InputSettleDelay, cancellationToken).ConfigureAwait(false);
+        await SnapshotAsync("email-clicked", cancellationToken).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "type", "--clearmodifiers", "--delay", TypingDelay, userId).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "key", "Tab").ConfigureAwait(false);
         await Task.Delay(InputSettleDelay, cancellationToken).ConfigureAwait(false);
+        await SnapshotAsync("id-typed", cancellationToken).ConfigureAwait(false);
         _ = await XDoToolAsync(cancellationToken, "type", "--clearmodifiers", "--delay", TypingDelay, otp).ConfigureAwait(false);
+        await SnapshotAsync("code-typed", cancellationToken).ConfigureAwait(false);
         await ClickAsync(window, LoginButtonPercent, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(InputSettleDelay, cancellationToken).ConfigureAwait(false);
+        await SnapshotAsync("login-clicked", cancellationToken).ConfigureAwait(false);
 
         // The cloud login runs before the "Logon successful" dialog is drawn; the dialog's window can be the login
         // window itself, so there is no new window to wait for.
         await Task.Delay(CloudLoginDelay, cancellationToken).ConfigureAwait(false);
+        await SnapshotAsync("after-login", cancellationToken).ConfigureAwait(false);
 
         // The token only activates once the dialog's Close button (bottom-centre) is clicked.
         var dialog = await LargestWindowAsync(cancellationToken).ConfigureAwait(false) ?? window;
         await ActivateAsync(dialog, cancellationToken).ConfigureAwait(false);
         await ClickAsync(dialog, CloseButtonPercent, cancellationToken).ConfigureAwait(false);
         await Task.Delay(CloseSettleDelay, cancellationToken).ConfigureAwait(false);
+        await SnapshotAsync("closed", cancellationToken).ConfigureAwait(false);
         return true;
     }
 
@@ -265,6 +335,7 @@ internal static partial class Program
         var slots = await PollAsync(_ => Task.FromResult(ListTokens(module)), TokenTimeout, cancellationToken).ConfigureAwait(false);
         if (slots is null)
         {
+            await SnapshotAsync("no-token", cancellationToken).ConfigureAwait(false);
             Console.WriteLine("::error::the PKCS#11 module lists no token; the login did not complete");
             return 1;
         }
