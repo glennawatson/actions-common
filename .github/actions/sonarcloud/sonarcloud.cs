@@ -40,7 +40,7 @@ internal static partial class Program
 
         return Process.Run(
             "dotnet",
-            [
+            MergeProperties([
                 "sonarscanner", "begin",
                 $"/k:{projectKey}",
                 .. Switch("/o:", organization),
@@ -57,7 +57,30 @@ internal static partial class Program
                 .. Switch("/d:sonar.test.exclusions=", testExclusions),
                 .. Switch("/v:", version),
                 .. extraBeginArgs.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-            ]).ExitCode;
+            ])).ExitCode;
+    }
+
+    /// <summary>Applies extra property values over defaults without repeating scanner switches.</summary>
+    /// <param name="arguments">The scanner arguments in precedence order.</param>
+    /// <returns>The arguments with each property supplied once.</returns>
+    private static string[] MergeProperties(string[] arguments)
+    {
+        const string propertyPrefix = "/d:";
+        var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var otherArguments = new List<string>(arguments.Length);
+        foreach (var argument in arguments)
+        {
+            if (argument.StartsWith(propertyPrefix, StringComparison.OrdinalIgnoreCase) && argument.IndexOf('=') is var separator && separator > propertyPrefix.Length)
+            {
+                properties[argument[..separator]] = argument;
+            }
+            else
+            {
+                otherArguments.Add(argument);
+            }
+        }
+
+        return [.. otherArguments, .. properties.Values];
     }
 
     /// <summary>Checks that the caller mapped the SONAR_TOKEN secret into the environment.</summary>
