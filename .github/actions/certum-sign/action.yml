@@ -1,74 +1,64 @@
-name: Certum signing
-description: Sign in to the Certum token once per job and sign the given files. Run in the certum-signer image with CERTUM_USER_ID and CERTUM_OTP_URI set.
+name: Certum SimplySign signing (SafeSign)
+description: |
+  Sign Windows executables and installers, NuGet packages and RPMs with a Certum
+  "Code Signing in the Cloud" certificate through the SafeSign .NET tool, verify
+  signed NuGet packages with `dotnet nuget verify`, and optionally write SHA256SUMS.
+  Run dotnet-environment first. Runs on any GitHub runner.
+
+  Credentials are read from the environment, because composite actions cannot declare
+  secret-typed inputs. Map these secrets into env on the calling job:
+    CERTUM_USER_ID            SimplySign login id
+    CERTUM_OTP_URI            otpauth:// URI for the SimplySign TOTP
+    CERTUM_CERT_FINGERPRINT   (optional) SHA-256 fingerprint to assert against
 
 inputs:
-  authenticode:
-    description: 'Glob of Windows files to sign with jsign (.exe, .dll, .msi, .msix).'
+  packages-glob:
+    description: 'Glob of .nupkg files to sign (relative to the working directory).'
     required: false
     default: ''
   nuget:
-    description: 'Glob of .nupkg files to sign with jsign and check with dotnet nuget verify.'
+    description: 'Glob of .nupkg files to sign with SafeSign and check with dotnet nuget verify.'
+    required: false
+    default: ''
+  authenticode:
+    description: 'Glob of Windows files to sign with SafeSign (.exe, .dll, .msi, .msix).'
     required: false
     default: ''
   rpm:
-    description: 'Glob of .rpm files to give IMA file signatures.'
+    description: 'Glob of .rpm files to give IMA file signatures with SafeSign.'
     required: false
     default: ''
   checksums:
-    description: 'Glob of release files; SHA256SUMS and a signed SHA256SUMS.p7s are written beside them. Runs last.'
+    description: 'Glob of release files; SHA256SUMS is written beside them. Runs last.'
     required: false
     default: ''
   certificate-from:
-    description: 'A file already signed with this certificate (.exe, .dll, .msi or .msix), read for the checksums signature.'
+    description: 'Unused; retained for caller compatibility.'
     required: false
     default: ''
   timestamp-url:
     description: 'RFC3161 timestamp authority URL.'
     required: false
     default: 'http://time.certum.pl'
-  launch-seconds:
-    description: 'Most seconds to wait for SimplySign to show its login window.'
-    required: false
-    default: '90'
 
 runs:
   using: composite
   steps:
-    # certum-connect exports SS_PKCS11, so a second use in the same job reuses the session.
-    - name: Sign in to SimplySign
-      if: env.SS_PKCS11 == ''
+    - name: Install SafeSign
+      if: env.SAFESIGN_INSTALLED == ''
       shell: bash
-      env:
-        LAUNCH_SECONDS: ${{ inputs.launch-seconds }}
-      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-connect.cs" -- "$LAUNCH_SECONDS"
+      run: |
+        dotnet tool install --global SafeSign
+        echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+        echo "SAFESIGN_INSTALLED=1" >> "$GITHUB_ENV"
 
-    - name: Sign Windows files
-      if: inputs.authenticode != ''
+    - name: Sign files with SafeSign
       shell: bash
       env:
         TS_URL: ${{ inputs.timestamp-url }}
-        FILES: ${{ inputs.authenticode }}
-      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-sign.cs" -- "$TS_URL" "$FILES" authenticode
-
-    - name: Sign NuGet packages
-      if: inputs.nuget != ''
-      shell: bash
-      env:
-        TS_URL: ${{ inputs.timestamp-url }}
-        FILES: ${{ inputs.nuget }}
-      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-sign.cs" -- "$TS_URL" "$FILES" nuget
-
-    - name: Sign RPM files
-      if: inputs.rpm != ''
-      shell: bash
-      env:
-        FILES: ${{ inputs.rpm }}
-      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-rpm-sign.cs" -- "$FILES"
-
-    - name: Write and sign SHA256SUMS
-      if: inputs.checksums != ''
-      shell: bash
-      env:
-        FILES: ${{ inputs.checksums }}
-        CERTIFICATE_FROM: ${{ inputs.certificate-from }}
-      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-checksums-sign.cs" -- "$FILES" "$CERTIFICATE_FROM"
+        AUTHENTICODE_GLOB: ${{ inputs.authenticode }}
+        NUGET_GLOB: ${{ inputs.nuget != '' && inputs.nuget || inputs.packages-glob }}
+        RPM_GLOB: ${{ inputs.rpm }}
+        CHECKSUMS_GLOB: ${{ inputs.checksums }}
+      working-directory: ${{ runner.temp }}
+      run: dotnet run --file "$GITHUB_ACTION_PATH/certum-sign.cs" -- "$TS_URL" "$AUTHENTICODE_GLOB" "$NUGET_GLOB" "$RPM_GLOB" "$CHECKSUMS_GLOB"

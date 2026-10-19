@@ -2,143 +2,210 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers;
 using System.Diagnostics;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using static System.Environment;
 
-if (args is not [var timestampUrl, var packagesGlob, var targetType])
+if (args is not [var timestampUrl, var authenticodeGlob, var nugetGlob, var rpmGlob, var checksumsGlob])
 {
-    Console.WriteLine("::error::Expected the timestamp URL, packages glob and target type arguments.");
+    Console.WriteLine("::error::Expected the timestamp URL, authenticode glob, NuGet glob, RPM glob and checksums glob arguments.");
     return Program.UsageError;
 }
 
-if (targetType is not (Program.NuGet or Program.Authenticode))
+if ((authenticodeGlob, nugetGlob, rpmGlob, checksumsGlob) is ("", "", "", ""))
 {
-    Console.WriteLine($"::error::Unknown target type {targetType}; use {Program.NuGet} or {Program.Authenticode}.");
-    return Program.UsageError;
+    nugetGlob = "signed/*.nupkg";
 }
-
-if (GetEnvironmentVariable("JSIGN_JAR") is not { Length: > 0 } jar)
-{
-    Console.WriteLine("::error::The prebuilt certum-signer image must set JSIGN_JAR.");
-    return 1;
-}
-
-var keystore = Path.Combine(GetEnvironmentVariable("RUNNER_TEMP")!, "sunpkcs11.conf");
-
-await File.WriteAllLinesAsync(keystore, ["name = SimplySign", $"library = {GetEnvironmentVariable("SS_PKCS11")}", "slotListIndex = 0"]).ConfigureAwait(false);
 
 Directory.SetCurrentDirectory(GetEnvironmentVariable("GITHUB_WORKSPACE")!);
 
-var packages = Program.Match(packagesGlob);
-
-if (packages is [])
+if (!Program.TryMatch(authenticodeGlob, excludeChecksums: false, out var authenticode)
+    || !Program.TryMatch(nugetGlob, excludeChecksums: false, out var nuget)
+    || !Program.TryMatch(rpmGlob, excludeChecksums: false, out var rpm)
+    || !Program.TryMatch(checksumsGlob, excludeChecksums: true, out var checksumFiles))
 {
-    Console.WriteLine($"::error::no packages matched: {packagesGlob}");
     return 1;
 }
 
-foreach (var package in packages)
+string[] toSign = [.. authenticode, .. nuget, .. rpm];
+
+if (toSign.Length > 0)
 {
-    Console.WriteLine($"::group::sign {package}");
-    if (await Program.SignAsync(jar, keystore, timestampUrl, package, CancellationToken.None).ConfigureAwait(false) is not 0 and var failed)
+    if ((GetEnvironmentVariable("CERTUM_USER_ID"), GetEnvironmentVariable("CERTUM_OTP_URI")) is not ({ Length: > 0 }, { Length: > 0 }))
     {
-        return failed;
+        Console.WriteLine("::error::Map the CERTUM_USER_ID and CERTUM_OTP_URI secrets into the job env.");
+        return 1;
     }
 
-    if (targetType is Program.NuGet && await Program.VerifyAsync(package, CancellationToken.None).ConfigureAwait(false) is not 0 and var unverified)
-    {
-        return unverified;
-    }
+    await Program.WaitForFreshTotpWindowAsync(CancellationToken.None).ConfigureAwait(false);
 
+    // One run signs every file, so SafeSign logs in to SimplySign once. It reads the credentials from the environment.
+    Console.WriteLine("::group::sign files");
+    var sign = await Process.RunAsync(
+        "safesign",
+        ["sign", .. toSign, "--provider", "certum", "--hash", "SHA256", "--timestamp-url", timestampUrl],
+        cancellationToken: CancellationToken.None).ConfigureAwait(false);
     Console.WriteLine("::endgroup::");
+    if (sign is { ExitCode: not 0 })
+    {
+        return sign.ExitCode;
+    }
+
+    await Program.RecordTotpWindowAsync(CancellationToken.None).ConfigureAwait(false);
+}
+
+foreach (var package in nuget)
+{
+    Console.WriteLine($"::group::verify {package}");
+    var verify = await Process.RunAsync(
+        "dotnet",
+        ["nuget", "verify", package, "--all", "--verbosity", "detailed"],
+        cancellationToken: CancellationToken.None).ConfigureAwait(false);
+    Console.WriteLine("::endgroup::");
+    if (verify is { ExitCode: not 0 })
+    {
+        return verify.ExitCode;
+    }
+}
+
+if (checksumsGlob is { Length: > 0 })
+{
+    var folder = Path.GetDirectoryName(checksumsGlob) is { Length: > 0 } directory ? directory : ".";
+    var content = Program.Checksums(checksumFiles);
+    await File.WriteAllBytesAsync(Path.Combine(folder, Program.ChecksumsName), content, CancellationToken.None).ConfigureAwait(false);
+    Console.WriteLine($"Wrote {Program.ChecksumsName} for {checksumFiles.Length} files.");
 }
 
 return 0;
 
-/// <summary>Signs files with jsign through the Certum token's PKCS#11 keystore.</summary>
+/// <summary>Signs files with SafeSign, verifies signed NuGet packages, and writes SHA256SUMS.</summary>
 internal static partial class Program
 {
     /// <summary>The exit code for bad arguments.</summary>
     internal const int UsageError = 2;
 
-    /// <summary>The target type for NuGet packages, which are verified after signing.</summary>
-    internal const string NuGet = "nuget";
+    /// <summary>The file name written for release checksums.</summary>
+    internal const string ChecksumsName = "SHA256SUMS";
 
-    /// <summary>The target type for Windows executables and installers.</summary>
-    internal const string Authenticode = "authenticode";
+    /// <summary>The environment variable tracking the last 30-second TOTP step used in this job.</summary>
+    private const string LastTotpStepVariable = "CERTUM_LAST_TOTP_STEP";
 
-    /// <summary>The longest wait for the keystore to show the certificate after login.</summary>
-    private static readonly TimeSpan CertificateTimeout = TimeSpan.FromSeconds(60);
+    /// <summary>The RFC 6238 TOTP period in seconds.</summary>
+    private const long TotpPeriodSeconds = 30;
 
-    /// <summary>The interval between jsign attempts while the keystore shows no certificate.</summary>
-    private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(4);
+    /// <summary>The two spaces sha256sum puts between the hash and the file name.</summary>
+    private static readonly byte[] Separator = "  "u8.ToArray();
 
-    /// <summary>Lists the files that match a glob whose wildcards are in the file name only.</summary>
-    /// <param name="glob">The glob, relative to the working directory.</param>
-    /// <returns>The matching files, sorted ordinally.</returns>
-    internal static string[] Match(string glob)
+    /// <summary>Matches files for an optional glob and logs an error when a non-empty glob matches nothing.</summary>
+    /// <param name="glob">The file glob, or empty to skip.</param>
+    /// <param name="excludeChecksums">True to exclude existing SHA256SUMS files.</param>
+    /// <param name="files">Receives the matched files sorted ordinally.</param>
+    /// <returns>False when a non-empty glob matched no files.</returns>
+    internal static bool TryMatch(string glob, bool excludeChecksums, out string[] files)
     {
+        if (glob is "")
+        {
+            files = [];
+            return true;
+        }
+
         var folder = Path.GetDirectoryName(glob) is { Length: > 0 } directory ? directory : ".";
         if (!Directory.Exists(folder))
         {
-            return [];
+            Console.WriteLine($"::error::no files matched: {glob}");
+            files = [];
+            return false;
         }
 
-        var files = Directory.GetFiles(folder, Path.GetFileName(glob));
-        Array.Sort(files, StringComparer.Ordinal);
-        return files;
-    }
-
-    /// <summary>Signs one file, retrying while the keystore reports no certificate.</summary>
-    /// <param name="jar">The jsign jar.</param>
-    /// <param name="keystore">The SunPKCS11 configuration.</param>
-    /// <param name="timestampUrl">The RFC 3161 timestamp authority.</param>
-    /// <param name="package">The file to sign.</param>
-    /// <param name="cancellationToken">Stops jsign and the retries.</param>
-    /// <returns>Zero on success, otherwise the exit code to stop with.</returns>
-    internal static async Task<int> SignAsync(string jar, string keystore, string timestampUrl, string package, CancellationToken cancellationToken)
-    {
-        // The keystore can report no certificate for a few seconds after login, so only that error is retried.
-        // jsign auto-selects the token's single key; the RFC3161 timestamp outlives the certificate.
-        string[] arguments =
-        [
-            "-jar", jar, "--storetype", "PKCS11", "--keystore", keystore, "--storepass", string.Empty,
-            "--alg", "SHA-256", "--tsmode", "RFC3161", "--tsaurl", timestampUrl, "--replace", package,
-        ];
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        limit.CancelAfter(CertificateTimeout);
-        using var timer = new PeriodicTimer(RetryInterval);
-        var attempt = 1;
-        try
+        List<string> matched = [];
+        foreach (var file in Directory.EnumerateFiles(folder, Path.GetFileName(glob)))
         {
-            do
+            if (!excludeChecksums || !Path.GetFileName(file.AsSpan()).StartsWith(ChecksumsName, StringComparison.Ordinal))
             {
-                var result = await Process.RunAndCaptureTextAsync("java", arguments, cancellationToken).ConfigureAwait(false);
-                var output = result.StandardOutput + result.StandardError;
-                Console.WriteLine(output);
-                if (result.ExitStatus.ExitCode is 0 || !output.Contains("No certificate found", StringComparison.Ordinal))
-                {
-                    return result.ExitStatus.ExitCode;
-                }
-
-                Console.WriteLine($"keystore not populated yet (attempt {attempt})");
-                attempt++;
+                matched.Add(file);
             }
-            while (await timer.WaitForNextTickAsync(limit.Token).ConfigureAwait(false));
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // The timeout passed with the keystore still empty.
         }
 
-        Console.WriteLine("::error::keystore exposed no certificate to jsign");
-        return 1;
+        if (matched is [])
+        {
+            Console.WriteLine($"::error::no files matched: {glob}");
+            files = [];
+            return false;
+        }
+
+        matched.Sort(StringComparer.Ordinal);
+        files = [.. matched];
+        return true;
     }
 
-    /// <summary>Checks a signed NuGet package with dotnet nuget verify.</summary>
-    /// <param name="package">The package.</param>
-    /// <param name="cancellationToken">Stops the check.</param>
-    /// <returns>The exit code.</returns>
-    internal static async Task<int> VerifyAsync(string package, CancellationToken cancellationToken) =>
-        (await Process.RunAsync("dotnet", ["nuget", "verify", package, "--all", "--verbosity", "detailed"], cancellationToken: cancellationToken).ConfigureAwait(false)).ExitCode;
+    /// <summary>Waits until the next 30-second TOTP window when an earlier step in the same job already used the current window.</summary>
+    /// <param name="cancellationToken">Stops the wait.</param>
+    /// <returns>A task that completes once the current 30-second TOTP window is unused.</returns>
+    internal static async Task WaitForFreshTotpWindowAsync(CancellationToken cancellationToken)
+    {
+        if (GetEnvironmentVariable(LastTotpStepVariable) is not { Length: > 0 } raw
+            || !long.TryParse(raw, CultureInfo.InvariantCulture, out var lastStep))
+        {
+            return;
+        }
+
+        var now = TimeProvider.System.GetUtcNow();
+        var currentStep = now.ToUnixTimeSeconds() / TotpPeriodSeconds;
+        if (currentStep > lastStep)
+        {
+            return;
+        }
+
+        var nextWindowStart = DateTimeOffset.FromUnixTimeSeconds((lastStep + 1) * TotpPeriodSeconds);
+        var delay = nextWindowStart - now + TimeSpan.FromSeconds(1);
+        if (delay <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Records the current 30-second TOTP step in GITHUB_ENV so a later step does not reuse the same code.</summary>
+    /// <param name="cancellationToken">Stops the file write.</param>
+    /// <returns>A task that completes when the step is recorded.</returns>
+    internal static async Task RecordTotpWindowAsync(CancellationToken cancellationToken)
+    {
+        if (GetEnvironmentVariable("GITHUB_ENV") is not { Length: > 0 } envFile)
+        {
+            return;
+        }
+
+        var step = TimeProvider.System.GetUtcNow().ToUnixTimeSeconds() / TotpPeriodSeconds;
+        await File.AppendAllLinesAsync(envFile, [$"{LastTotpStepVariable}={step}"], cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Writes SHA256SUMS in the format sha256sum -c reads: hash, two spaces, file name, newline.</summary>
+    /// <param name="files">The files.</param>
+    /// <returns>The SHA256SUMS bytes.</returns>
+    internal static ReadOnlyMemory<byte> Checksums(string[] files)
+    {
+        const int HexLength = SHA256.HashSizeInBytes * 2;
+        var sums = new ArrayBufferWriter<byte>();
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        foreach (var file in files)
+        {
+            using (var stream = new FileStream(file, new FileStreamOptions { Options = FileOptions.SequentialScan }))
+            {
+                _ = SHA256.HashData(stream, hash);
+            }
+
+            _ = Convert.TryToHexStringLower(hash, sums.GetSpan(HexLength), out var written);
+            sums.Advance(written);
+            sums.Write(Separator);
+            var name = Path.GetFileName(file);
+            sums.Advance(Encoding.UTF8.GetBytes(name, sums.GetSpan(Encoding.UTF8.GetByteCount(name) + 1)));
+            sums.Write("\n"u8);
+        }
+
+        return sums.WrittenMemory;
+    }
 }
