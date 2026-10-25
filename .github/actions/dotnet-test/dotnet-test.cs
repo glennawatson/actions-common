@@ -33,13 +33,13 @@ internal static partial class Program
     private static readonly EnumerationOptions SolutionSearch = new() { AttributesToSkip = 0 };
 
     /// <summary>Runs dotnet test over the solution or the chosen projects.</summary>
-    /// <param name="args">The source folder, solution file, configuration, detailed logging flag, test timeout and test project globs.</param>
+    /// <param name="args">The source folder, solution file, configuration, detailed logging flag, test timeout, test project globs and crash dump flag.</param>
     /// <returns>The process exit code.</returns>
     internal static int Run(string[] args)
     {
-        if (args is not [var srcFolder, var solutionFile, var configuration, var detailedLogging, var testTimeout, var testProjects])
+        if (args is not [var srcFolder, var solutionFile, var configuration, var detailedLogging, var testTimeout, var testProjects, var collectCrashDumps])
         {
-            Console.WriteLine("::error::Expected the source folder, solution file, configuration, detailed logging, test timeout and test projects arguments.");
+            Console.WriteLine("::error::Expected the source folder, solution file, configuration, detailed logging, test timeout, test projects and crash dump arguments.");
             return UsageError;
         }
 
@@ -73,6 +73,21 @@ internal static partial class Program
             solution = [SolutionOption, filterPath];
         }
 
+        var options = RunOptions(detailedLogging, testTimeout, collectCrashDumps);
+
+        // No --results-directory: parallel test hosts sharing one directory collide on log_<ts>.diag names.
+        return Process.Run(
+            "dotnet",
+            ["test", .. solution, "--no-build", "--configuration", configuration, .. options, "--coverage", "--coverage-output-format", "cobertura"]).ExitCode;
+    }
+
+    /// <summary>Chooses the optional test run arguments.</summary>
+    /// <param name="detailedLogging">"true" to write diagnostic logs.</param>
+    /// <param name="testTimeout">The global test timeout, or empty for none.</param>
+    /// <param name="collectCrashDumps">"true" to write a dump when a test host crashes.</param>
+    /// <returns>The arguments.</returns>
+    private static string[] RunOptions(string detailedLogging, string testTimeout, string collectCrashDumps)
+    {
         // --verbosity is VSTest-only and ignored by MTP. Synchronous writes keep the log when the runner kills a hung test.
         string[] diagnostics = detailedLogging is "true"
             ? ["--diagnostic", "--diagnostic-verbosity", "Trace", "--diagnostic-synchronous-write", "--log-level", "Trace", "--output", "Detailed"]
@@ -80,10 +95,10 @@ internal static partial class Program
 
         string[] timeout = testTimeout is "" ? [] : ["--timeout", testTimeout];
 
-        // No --results-directory: parallel test hosts sharing one directory collide on log_<ts>.diag names.
-        return Process.Run(
-            "dotnet",
-            ["test", .. solution, "--no-build", "--configuration", configuration, .. diagnostics, .. timeout, "--coverage", "--coverage-output-format", "cobertura"]).ExitCode;
+        // A mini dump keeps the artifact small and still holds the stacks of the thread that crashed.
+        string[] crashDumps = collectCrashDumps is "true" ? ["--crashdump", "--crashdump-type", "Mini"] : [];
+
+        return [.. diagnostics, .. timeout, .. crashDumps];
     }
 
     /// <summary>Writes a solution filter holding the solution's projects that match the globs.</summary>

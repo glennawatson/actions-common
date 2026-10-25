@@ -30,6 +30,10 @@ inputs:
     description: 'Optional suffix for the coverage and diagnostic artifact names, so a second test job on the same OS does not collide (e.g. "-msbuild").'
     required: false
     default: ''
+  collect-crash-dumps:
+    description: 'Write a dump when a test host crashes and upload it as an artifact. Every test project must reference Microsoft.Testing.Extensions.CrashDump at the version of Microsoft.Testing.Platform it runs on.'
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -50,8 +54,9 @@ runs:
         DETAILED_LOGGING: ${{ inputs.enable-detailed-test-logging }}
         TEST_TIMEOUT: ${{ inputs.test-timeout }}
         TEST_PROJECTS: ${{ inputs.test-projects }}
+        COLLECT_CRASH_DUMPS: ${{ inputs.collect-crash-dumps }}
       working-directory: ${{ runner.temp }}
-      run: dotnet run --file "$GITHUB_ACTION_PATH/dotnet-test.cs" -- "$SRC_FOLDER" "$SOLUTION_FILE" "$CONFIGURATION" "$DETAILED_LOGGING" "$TEST_TIMEOUT" "$TEST_PROJECTS"
+      run: dotnet run --file "$GITHUB_ACTION_PATH/dotnet-test.cs" -- "$SRC_FOLDER" "$SOLUTION_FILE" "$CONFIGURATION" "$DETAILED_LOGGING" "$TEST_TIMEOUT" "$TEST_PROJECTS" "$COLLECT_CRASH_DUMPS"
 
     - name: Upload per-OS coverage reports as build artifacts
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -72,5 +77,14 @@ runs:
         path: |
           ${{ inputs.src-folder }}/**/TestResults/**/*.diag
           ${{ inputs.src-folder }}/**/TestResults/**/log_*.diag
+        if-no-files-found: ignore
+        retention-days: 7
+
+    - name: Upload test host crash dumps
+      if: always() && inputs.collect-crash-dumps == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: crash-dumps-${{ runner.os }}${{ inputs.artifact-suffix }}
+        path: ${{ inputs.src-folder }}/**/TestResults/**/*.dmp
         if-no-files-found: ignore
         retention-days: 7
