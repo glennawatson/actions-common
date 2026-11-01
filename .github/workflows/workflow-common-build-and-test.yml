@@ -1,0 +1,76 @@
+name: Common .NET build and test on one runner
+
+# The same build and test steps as the jobs in workflow-common-setup-and-build.yml, on the runner the caller names. A caller runs it on several
+# runners with a matrix on the job that uses it.
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+        description: 'Runner label to build and test on, e.g. ubuntu-24.04-arm.'
+      srcFolder:
+        type: string
+        default: 'src'
+        description: 'Folder containing the solution'
+      solutionFile:
+        type: string
+        default: ''
+        description: 'Solution or solution filter, relative to srcFolder'
+      configuration:
+        type: string
+        default: 'Release'
+        description: 'Build configuration'
+      dotnetVersions:
+        type: string
+        default: ''
+        description: 'Newline-separated .NET SDK versions to install'
+      minverTagPrefix:
+        type: string
+        default: ''
+        description: 'MinVer tag prefix'
+      enableDetailedTestLogging:
+        type: boolean
+        default: true
+        description: 'Enable MTP diagnostic logging (Trace-level .diag files, sync writes, --output Detailed)'
+      testTimeout:
+        type: string
+        default: ''
+        description: 'Optional global MTP test timeout (format [h|m|s], e.g. "5m"). Empty = no timeout.'
+
+jobs:
+  build-and-test:
+    runs-on: ${{ inputs.runner }}
+    env:
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
+        with:
+          dotnet-versions: ${{ inputs.dotnetVersions }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          minver-tag-prefix: ${{ inputs.minverTagPrefix }}
+
+      - name: Build
+        uses: glennawatson/actions-common/.github/actions/dotnet-build@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          create-packages: 'false'
+
+      - name: Test
+        uses: glennawatson/actions-common/.github/actions/dotnet-test@main
+        with:
+          configuration: ${{ inputs.configuration }}
+          src-folder: ${{ inputs.srcFolder }}
+          solution-file: ${{ inputs.solutionFile }}
+          enable-detailed-test-logging: ${{ inputs.enableDetailedTestLogging }}
+          test-timeout: ${{ inputs.testTimeout }}
+          artifact-suffix: '-${{ inputs.runner }}'

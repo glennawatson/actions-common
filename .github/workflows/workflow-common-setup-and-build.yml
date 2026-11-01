@@ -120,18 +120,6 @@ on:
         type: string
         default: ''
         description: 'Optional newline-separated globs, relative to the solution folder, choosing which projects to test (e.g. "tests/**/*.csproj"). A line starting with "!" excludes matches. Empty = every test project in the solution.'
-      windowsRunner:
-        type: string
-        default: 'windows-latest'
-        description: 'Runner label for the build-windows job. The job keeps its name whatever the label, so a required check on it still matches.'
-      unixRunners:
-        type: string
-        default: '["ubuntu-latest","macos-latest"]'
-        description: 'JSON array of runner labels for the build-unix matrix; each job is named build-unix (label). Do not repeat an operating system here, since their coverage artifacts share a name; put further images of an operating system in extraRunners.'
-      extraRunners:
-        type: string
-        default: '[]'
-        description: 'Optional JSON array of runner labels, e.g. ["ubuntu-24.04-arm","windows-11-arm","macos-15-intel"], that build and test the same way as the Windows, Linux and macOS jobs. Empty array = none. These jobs are named build-extra (label).'
 
     secrets:
       NuGetAPIKey:
@@ -156,7 +144,7 @@ jobs:
   build-windows:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ${{ inputs.windowsRunner }}
+    runs-on: windows-latest
     env:
       DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
     outputs:
@@ -224,7 +212,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.unixRunners) }}
+        os: [ubuntu-latest, macos-latest]
     env:
       DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
     steps:
@@ -267,56 +255,6 @@ jobs:
           enable-detailed-test-logging: ${{ inputs.enableDetailedTestLogging }}
           test-timeout: ${{ inputs.testTimeout }}
           test-projects: ${{ inputs.testProjects }}
-
-  # The same build and test as the jobs above on more runners, such as the arm64 and Intel macOS images. Each label is its own job, so a
-  # label that repeats an operating system still gets its own coverage and diagnostics artifacts.
-  build-extra:
-    needs: changes
-    if: ${{ !cancelled() && inputs.extraRunners != '[]' && needs.changes.outputs.code != 'false' }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(inputs.extraRunners) }}
-    env:
-      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 1
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET Environment
-        uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
-        with:
-          dotnet-versions: ${{ inputs.dotnetVersions }}
-          src-folder: ${{ inputs.srcFolder }}
-          solution-file: ${{ inputs.solutionFile }}
-          install-workloads: ${{ inputs.installWorkloads }}
-          minver-tag-prefix: ${{ inputs.minverTagPrefix }}
-          minver-minimum-major-minor: ${{ inputs.minverMinimumMajorMinor }}
-          minver-auto-increment: ${{ inputs.minverAutoIncrement }}
-          minver-default-pre-release-identifiers: ${{ inputs.minverDefaultPreReleaseIdentifiers }}
-
-      - name: Build
-        uses: glennawatson/actions-common/.github/actions/dotnet-build@main
-        with:
-          configuration: ${{ inputs.configuration }}
-          src-folder: ${{ inputs.srcFolder }}
-          solution-file: ${{ inputs.solutionFile }}
-          create-packages: 'false'
-
-      - name: Test
-        if: inputs.performTests == true
-        uses: glennawatson/actions-common/.github/actions/dotnet-test@main
-        with:
-          configuration: ${{ inputs.configuration }}
-          src-folder: ${{ inputs.srcFolder }}
-          solution-file: ${{ inputs.solutionFile }}
-          enable-detailed-test-logging: ${{ inputs.enableDetailedTestLogging }}
-          test-timeout: ${{ inputs.testTimeout }}
-          test-projects: ${{ inputs.testProjects }}
-          artifact-suffix: '-${{ matrix.os }}'
 
   # Projects that only MSBuild can build, such as Uno.Sdk projects, build and test here so the rest keep the dotnet flow.
   build-msbuild:
@@ -366,9 +304,8 @@ jobs:
     needs:
       - build-windows
       - build-unix
-      - build-extra
       - build-msbuild
-    if: ${{ !cancelled() && inputs.performTests == true && needs.build-windows.result == 'success' && needs.build-unix.result == 'success' && (needs.build-extra.result == 'success' || needs.build-extra.result == 'skipped') && (needs.build-msbuild.result == 'success' || needs.build-msbuild.result == 'skipped') }}
+    if: ${{ !cancelled() && inputs.performTests == true && needs.build-windows.result == 'success' && needs.build-unix.result == 'success' && (needs.build-msbuild.result == 'success' || needs.build-msbuild.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for PR summary context)
