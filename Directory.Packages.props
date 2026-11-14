@@ -2,15 +2,27 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <RoslynCommonAnalyzersVersion>5.1.4</RoslynCommonAnalyzersVersion>
-    <DotNetLibrariesVersion>11.0.0</DotNetLibrariesVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="StyleSharp.Analyzers" Version="$(RoslynCommonAnalyzersVersion)" />
     <PackageVersion Include="PerformanceSharp.Analyzers" Version="$(RoslynCommonAnalyzersVersion)" />
     <PackageVersion Include="SecuritySharp.Analyzers" Version="$(RoslynCommonAnalyzersVersion)" />
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
-    <PackageVersion Include="System.IO.Hashing" Version="$(DotNetLibrariesVersion)" />
-    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="$(DotNetLibrariesVersion)" />
     <PackageVersion Include="OpenMcdf" Version="3.4.0" />
   </ItemGroup>
+
+  <Choose>
+    <When Condition="'$(TargetFramework)' != '' And $([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net11.0'))">
+      <ItemGroup>
+        <PackageVersion Include="System.IO.Hashing" Version="11.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="11.0.0" />
+      </ItemGroup>
+    </When>
+    <Otherwise>
+      <ItemGroup>
+        <PackageVersion Include="System.IO.Hashing" Version="10.0.15" />
+        <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.15" />
+      </ItemGroup>
+    </Otherwise>
+  </Choose>
 </Project>
